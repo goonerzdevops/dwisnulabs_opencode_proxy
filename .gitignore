@@ -1,0 +1,27 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Runtime logs and telemetry
+logs/
+*.log
+*.jsonl
+proxy_err.log
+proxy_run.log
+
+# Temporary test and probe artifacts
+*.out
+*.test
+.smoke/
+.*.ps1
+.*.txt
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

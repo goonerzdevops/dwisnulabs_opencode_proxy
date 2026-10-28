@@ -1,0 +1,23 @@
+{
+  "port": 20144,
+  "host": "127.0.0.1",
+  "api_keys": [
+    "sk-opencode-free"
+  ],
+  "permissive_auth": true,
+  "default_model": "big-pickle",
+  "model_aliases": {},
+  "upstream_base_url": "https://opencode.ai",
+  "session_ttl_minutes": 60,
+  "upstream_timeout_seconds": 600,
+  "log_requests": true,
+  "follow_upstream_models": true,
+  "system_prompt_tuning": "Berikan jawaban dengan artikulasi yang jelas, lengkap, dan tuntas dalam bahasa apa pun yang digunakan oleh pengguna, tanpa kata atau kalimat yang terpotong dan tanpa kebocoran istilah bahasa asing yang tidak relevan. Saat menulis kode dalam bahasa pemrograman apa pun, tuliskan kode secara utuh, bersih, valid secara sintaksis, dan siap pakai tanpa pemotongan atau placeholder yang tidak lengkap.",
+  "proxies": [
+    "direct"
+  ],
+  "proxy_cooldown_seconds": 60,
+  "anti_abuse_enabled": true,
+  "max_concurrent_per_node": 1,
+  "min_request_interval_ms": 800
+}

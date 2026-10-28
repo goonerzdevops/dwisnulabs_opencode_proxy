@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenCode Proxy — OpenAI Gateway</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h1>OpenCode Proxy</h1>
+          <p>Super Lightweight OpenAI-Compatible Gateway &bull; Port 20144</p>
+        </div>
+      </div>
+      <div class="badge-status">
+        <span class="badge-dot"></span>
+        <span>Gateway Online</span>
+      </div>
+    </header>
+
+    <!-- Stats Grid -->
+    <div class="grid-stats">
+      <div class="card">
+        <div class="stat-label">Default Model</div>
+        <div class="stat-value" id="stat-model" style="font-size: 15px; color: var(--accent-cyan); word-break: break-all;">-</div>
+        <div class="stat-sub">Active fallback routing</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Total Requests</div>
+        <div class="stat-value" id="stat-requests">0</div>
+        <div class="stat-sub">Served through gateway</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Input & Cache Hit</div>
+        <div class="stat-value" id="stat-input-tokens" style="color: var(--accent-cyan);">0</div>
+        <div class="cache-bar-wrap">
+          <div class="cache-bar-track">
+            <div class="cache-bar-fill" id="cache-bar-fill" style="width: 0%;"></div>
+          </div>
+        </div>
+        <div class="stat-sub" id="stat-cache-sub">0% Cache Hit (0 cached)</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Output Tokens</div>
+        <div class="stat-value" id="stat-output-tokens" style="color: var(--accent-purple);">0</div>
+        <div class="stat-sub">Completion throughput</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Active Sessions</div>
+        <div class="stat-value" id="stat-sessions">0</div>
+        <div class="stat-sub">Canonical affinity cached</div>
+      </div>
+      <div class="card">
+        <div class="stat-label">Daemon Uptime</div>
+        <div class="stat-value" id="stat-uptime">0s</div>
+        <div class="stat-sub">System service status</div>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="section-grid">
+      <!-- Settings Panel -->
+      <div class="card">
+        <div class="section-title">
+          <span>⚙️ Model & Routing Settings</span>
+        </div>
+
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label for="model-select" style="margin-bottom: 0;">Active Default Model</label>
+            <div style="display: flex; gap: 6px;">
+              <button type="button" class="copy-btn" id="btn-refresh-models" title="Fetch live models from upstream in real-time">🔄 Refresh</button>
+              <button type="button" class="copy-btn" id="btn-copy-model" title="Copy active model ID to clipboard">📋 Copy ID</button>
+            </div>
+          </div>
+          <select id="model-select">
+            <option value="big-pickle">Loading models...</option>
+          </select>
+          <div class="model-chips" id="model-chips"></div>
+          <div class="notice">Semua model free upstream terdeteksi otomatis (auto-detected). Klik chip di atas untuk memilih cepat, atau pilih dari dropdown untuk 90+ model lainnya.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="api-key-input">Local API Key (For Clients / Cline)</label>
+          <input type="text" id="api-key-input" readonly value="sk-opencode-free">
+          <div class="notice">Permissive auth is enabled: client may send any Bearer key.</div>
+        </div>
+
+        <div class="form-group">
+          <label for="prompt-tuning-input">Master Prompt Tuning (Artikulasi & Kejelasan Respons)</label>
+          <textarea id="prompt-tuning-input" rows="3" placeholder="Masukkan instruksi tuning komunikasi..."></textarea>
+          <div class="notice">Instruksi ini otomatis disisipkan ke model agar artikulasinya jelas, lengkap, dan tidak ada kata terpotong.</div>
+        </div>
+
+        <div class="form-group">
+          <label>Outbound Proxy Pool (Egress & Failover)</label>
+          <div id="proxy-list" style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Loading proxy nodes...</div>
+          </div>
+          <div class="notice">Semua request egress di-route lewat pool ini. Jika IP rate-limited (HTTP 429), gateway otomatis failover ke proxy berikutnya secara instan & transparan.</div>
+        </div>
+
+        <div class="form-group">
+          <label>Config File Path</label>
+          <div id="config-path" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); word-break: break-all;">-</div>
+        </div>
+
+        <button class="btn btn-primary" id="btn-save-model" style="width: 100%;">Save Settings</button>
+      </div>
+
+      <!-- Test Playground -->
+      <div class="card">
+        <div class="section-title">
+          <span>🧪 Live Model Tester (Playground)</span>
+        </div>
+
+        <div class="form-group">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <label for="test-model-select" style="margin-bottom: 0;">Target Model to Test</label>
+            <button type="button" class="copy-btn" id="btn-copy-test-model" title="Copy target model ID">📋 Copy ID</button>
+          </div>
+          <select id="test-model-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label for="test-prompt">Prompt Message</label>
+          <textarea id="test-prompt" rows="2" placeholder="Enter prompt...">Halo, perkenalkan dirimu dalam 1 kalimat singkat!</textarea>
+        </div>
+
+        <button class="btn btn-primary" id="btn-test" style="width: 100%; margin-bottom: 12px;">
+          <span>▶ Stream Test Prompt</span>
+        </button>
+
+        <div class="form-group">
+          <label>Live SSE Stream Output</label>
+          <div class="terminal-box" id="test-output">Waiting for test run...</div>
+          <div id="test-stats" style="font-size: 11px; color: var(--accent-green); margin-top: 6px; font-family: var(--font-mono);"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Stream Telemetry & Request Inspector Table -->
+    <div class="card" style="margin-bottom: 28px;">
+      <div class="section-header-flex">
+        <div class="section-title" style="margin-bottom: 0;">
+          <span>📊 Live Stream Telemetry & Request Inspector (Last 50 Requests)</span>
+        </div>
+        <div class="table-actions">
+          <span class="badge-live"><span class="badge-dot"></span> Live Stream Active</span>
+          <button class="btn btn-secondary btn-sm" id="btn-refresh-telemetry">↻ Refresh</button>
+          <button class="btn btn-secondary btn-sm" id="btn-clear-telemetry" style="color: #f87171; border-color: rgba(239, 68, 68, 0.35);" title="Kosongkan memori telemetri & log">🗑 Clear Data</button>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="telemetry-table" id="telemetry-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Model (Requested → Actual)</th>
+              <th>Lane</th>
+              <th>Input (Prompt)</th>
+              <th>Cache Hit %</th>
+              <th>Output</th>
+              <th>Latency</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="telemetry-tbody">
+            <tr>
+              <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 24px;">No requests recorded yet. Start making requests via Cline or Test Playground!</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Quick Integration Guide -->
+    <div class="card">
+      <div class="section-title">
+        <span>🔌 Quick Connect for Cline & Coding Agents</span>
+      </div>
+      <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
+        <p style="color: var(--accent-cyan); margin-bottom: 8px;"># Setting for Cline / Roo Code / Cursor / Aider:</p>
+        <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-base-url">http://127.0.0.1:20144/v1</span> <button type="button" class="copy-btn" id="btn-copy-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+        <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;" id="quick-api-key">sk-opencode-free</span> <button type="button" class="copy-btn" id="btn-copy-api-key" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+        <p>Model ID: <span id="quick-model-id" style="color: #38bdf8; font-weight: 600;">deepseek-v4.1-flash-free</span> <button type="button" class="copy-btn" id="btn-copy-quick-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+      </div>
+    </div>
+
+    <footer>
+      OpenCode Proxy Gateway &bull; Zero External Dependencies &bull; Running on Go
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
