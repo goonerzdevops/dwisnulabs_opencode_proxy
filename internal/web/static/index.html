@@ -3,8 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenCode Proxy — OpenAI Gateway</title>
+  <title>OpenCode Proxy — Multi-Provider AI Gateway</title>
   <link rel="stylesheet" href="/style.css">
+  <script>
+    // Puter.js browser SDK patch - suppress loud logs and prevent CORS Origin issues in local proxying
+    window.puter = window.puter || {};
+    window.puter.quiet = true;
+    (function() {
+      const origOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        origOpen.apply(this, arguments);
+        const origSetReqHeader = this.setRequestHeader;
+        this.setRequestHeader = function(header, value) {
+          if (header && header.toLowerCase() === 'origin') return;
+          origSetReqHeader.apply(this, arguments);
+        };
+      };
+    })();
+  </script>
+  <script src="https://js.puter.com/v2/"></script>
 </head>
 <body>
   <div class="container">
@@ -12,8 +29,8 @@
       <div class="brand">
         <div class="brand-icon">⚡</div>
         <div class="brand-text">
-          <h1>OpenCode Proxy</h1>
-          <p>Super Lightweight OpenAI-Compatible Gateway &bull; Port 20144</p>
+          <h1>OpenCode Proxy &amp; Gateway</h1>
+          <p>Multi-Provider OpenAI-Compatible Gateway &bull; Port 20144</p>
         </div>
       </div>
       <div class="badge-status">
@@ -61,93 +78,422 @@
       </div>
     </div>
 
-    <!-- Main Content -->
-    <div class="section-grid">
-      <!-- Settings Panel -->
-      <div class="card">
-        <div class="section-title">
-          <span>⚙️ Model & Routing Settings</span>
-        </div>
+    <!-- Navigation Tabs -->
+    <div class="tab-nav">
+      <button type="button" class="tab-btn active" data-tab="tab-opencode">
+        <span>⚡ OpenCode Gateway</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="tab-kilo">
+        <span>🟢 Kilo Gateway Hub</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="tab-puter">
+        <span>🟣 Puter AI Hub</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="tab-connect">
+        <span>🔌 Quick Connect Guide</span>
+      </button>
+    </div>
 
-        <div class="form-group">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label for="model-select" style="margin-bottom: 0;">Active Default Model</label>
-            <div style="display: flex; gap: 6px;">
-              <button type="button" class="copy-btn" id="btn-refresh-models" title="Fetch live models from upstream in real-time">🔄 Refresh</button>
-              <button type="button" class="copy-btn" id="btn-copy-model" title="Copy active model ID to clipboard">📋 Copy ID</button>
+    <!-- TAB 1: OpenCode Gateway -->
+    <div class="tab-pane active" id="tab-opencode">
+      <div class="section-grid">
+        <!-- Settings Panel -->
+        <div class="card">
+          <div class="section-title">
+            <span>⚙️ Model &amp; Routing Settings</span>
+          </div>
+
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="model-select" style="margin-bottom: 0;">Active Default Model</label>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="copy-btn" id="btn-refresh-models" title="Fetch live models from upstream in real-time">🔄 Refresh</button>
+                <button type="button" class="copy-btn" id="btn-copy-model" title="Copy active model ID to clipboard">📋 Copy ID</button>
+              </div>
             </div>
+            <select id="model-select">
+              <option value="big-pickle">Loading models...</option>
+            </select>
+            <div class="model-chips" id="model-chips"></div>
+            <div class="notice">Semua model free upstream terdeteksi otomatis (auto-detected). Klik chip di atas untuk memilih cepat, atau pilih dari dropdown untuk 90+ model lainnya.</div>
           </div>
-          <select id="model-select">
-            <option value="big-pickle">Loading models...</option>
-          </select>
-          <div class="model-chips" id="model-chips"></div>
-          <div class="notice">Semua model free upstream terdeteksi otomatis (auto-detected). Klik chip di atas untuk memilih cepat, atau pilih dari dropdown untuk 90+ model lainnya.</div>
-        </div>
 
-        <div class="form-group">
-          <label for="api-key-input">Local API Key (For Clients / Cline)</label>
-          <input type="text" id="api-key-input" readonly value="sk-opencode-free">
-          <div class="notice">Permissive auth is enabled: client may send any Bearer key.</div>
-        </div>
-
-        <div class="form-group">
-          <label for="prompt-tuning-input">Master Prompt Tuning (Artikulasi & Kejelasan Respons)</label>
-          <textarea id="prompt-tuning-input" rows="3" placeholder="Masukkan instruksi tuning komunikasi..."></textarea>
-          <div class="notice">Instruksi ini otomatis disisipkan ke model agar artikulasinya jelas, lengkap, dan tidak ada kata terpotong.</div>
-        </div>
-
-        <div class="form-group">
-          <label>Outbound Proxy Pool (Egress & Failover)</label>
-          <div id="proxy-list" style="display: flex; flex-direction: column; gap: 6px;">
-            <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Loading proxy nodes...</div>
+          <div class="form-group">
+            <label for="api-key-input">Local API Key (For Clients / Cline)</label>
+            <input type="text" id="api-key-input" readonly value="sk-opencode-free">
+            <div class="notice">Permissive auth is enabled: client may send any Bearer key.</div>
           </div>
-          <div class="notice">Semua request egress di-route lewat pool ini. Jika IP rate-limited (HTTP 429), gateway otomatis failover ke proxy berikutnya secara instan & transparan.</div>
-        </div>
 
-        <div class="form-group">
-          <label>Config File Path</label>
-          <div id="config-path" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); word-break: break-all;">-</div>
-        </div>
-
-        <button class="btn btn-primary" id="btn-save-model" style="width: 100%;">Save Settings</button>
-      </div>
-
-      <!-- Test Playground -->
-      <div class="card">
-        <div class="section-title">
-          <span>🧪 Live Model Tester (Playground)</span>
-        </div>
-
-        <div class="form-group">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <label for="test-model-select" style="margin-bottom: 0;">Target Model to Test</label>
-            <button type="button" class="copy-btn" id="btn-copy-test-model" title="Copy target model ID">📋 Copy ID</button>
+          <div class="form-group">
+            <label for="prompt-tuning-input">Master Prompt Tuning (Artikulasi &amp; Kejelasan Respons)</label>
+            <textarea id="prompt-tuning-input" rows="3" placeholder="Masukkan instruksi tuning komunikasi..."></textarea>
+            <div class="notice">Instruksi ini otomatis disisipkan ke model agar artikulasinya jelas, lengkap, dan tidak ada kata terpotong.</div>
           </div>
-          <select id="test-model-select"></select>
+
+          <div class="form-group">
+            <label>Outbound Proxy Pool (Egress &amp; Failover)</label>
+            <div id="proxy-list" style="display: flex; flex-direction: column; gap: 6px;">
+              <div style="font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);">Loading proxy nodes...</div>
+            </div>
+            <div class="notice">Semua request egress di-route lewat pool ini. Jika IP rate-limited (HTTP 429), gateway otomatis failover ke proxy berikutnya secara instan &amp; transparan.</div>
+          </div>
+
+          <div class="form-group">
+            <label>Config File Path</label>
+            <div id="config-path" style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); word-break: break-all;">-</div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-save-model" style="width: 100%;">Save Settings</button>
         </div>
 
-        <div class="form-group">
-          <label for="test-prompt">Prompt Message</label>
-          <textarea id="test-prompt" rows="2" placeholder="Enter prompt...">Halo, perkenalkan dirimu dalam 1 kalimat singkat!</textarea>
-        </div>
+        <!-- Test Playground -->
+        <div class="card">
+          <div class="section-title">
+            <span>🧪 Live Model Tester (Playground)</span>
+          </div>
 
-        <button class="btn btn-primary" id="btn-test" style="width: 100%; margin-bottom: 12px;">
-          <span>▶ Stream Test Prompt</span>
-        </button>
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="test-model-select" style="margin-bottom: 0;">Target Model to Test</label>
+              <button type="button" class="copy-btn" id="btn-copy-test-model" title="Copy target model ID">📋 Copy ID</button>
+            </div>
+            <select id="test-model-select"></select>
+          </div>
 
-        <div class="form-group">
-          <label>Live SSE Stream Output</label>
-          <div class="terminal-box" id="test-output">Waiting for test run...</div>
-          <div id="test-stats" style="font-size: 11px; color: var(--accent-green); margin-top: 6px; font-family: var(--font-mono);"></div>
+          <div class="form-group">
+            <label for="test-prompt">Prompt Message</label>
+            <textarea id="test-prompt" rows="2" placeholder="Enter prompt...">Halo, perkenalkan dirimu dalam 1 kalimat singkat!</textarea>
+          </div>
+
+          <button class="btn btn-primary" id="btn-test" style="width: 100%; margin-bottom: 12px;">
+            <span>▶ Stream Test Prompt</span>
+          </button>
+
+          <div class="form-group">
+            <label>Live SSE Stream Output</label>
+            <div class="terminal-box" id="test-output">Waiting for test run...</div>
+            <div id="test-stats" style="font-size: 11px; color: var(--accent-green); margin-top: 6px; font-family: var(--font-mono);"></div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Live Stream Telemetry & Request Inspector Table -->
-    <div class="card" style="margin-bottom: 28px;">
+    <!-- TAB 2: Kilo Gateway Hub -->
+    <div class="tab-pane" id="tab-kilo">
+      <!-- Kilo Hero Card -->
+      <div class="card" style="margin-bottom: 20px; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.06);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px;">
+          <div>
+            <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+              <span>🟢 Kilo Gateway Hub (Keyless Free Tier Flagships)</span>
+              <span class="badge-puter-status active" style="font-size: 10px;">Keyless Online</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+              Provider keyless bebas login &amp; tanpa API key dengan akses ke model monster <strong>NVIDIA Nemotron 550B MoE</strong>, <strong>Nemotron Super VL</strong>, <strong>StepFun 3.7 Flash</strong>, dan <strong>OpenRouter Free Router</strong>.
+            </div>
+          </div>
+          <div style="display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--accent-green);">
+            <div style="background: rgba(16, 185, 129, 0.12); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(16, 185, 129, 0.25);">
+              ⚡ Limit: <strong>200 req / jam per IP</strong> (~3.3 RPM)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-grid">
+        <!-- Kilo Settings Card -->
+        <div class="card">
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>🟢 Kilo Model &amp; Routing Settings</span>
+          </div>
+
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="kilo-model-select" style="margin-bottom: 0;">Kilo Default Model</label>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="copy-btn" id="btn-refresh-kilo-models" title="Fetch live models from Kilo catalog in real-time">🔄 Refresh</button>
+                <button type="button" class="copy-btn" id="btn-copy-kilo-model" title="Copy model ID">📋 Copy ID</button>
+              </div>
+            </div>
+            <select id="kilo-model-select">
+              <option value="openrouter/free">openrouter/free</option>
+              <option value="kilo-auto/free">kilo-auto/free</option>
+              <option value="nvidia/nemotron-3-ultra-550b-a55b:free">nvidia/nemotron-3-ultra-550b-a55b:free</option>
+              <option value="nvidia/nemotron-3.5-super-vl:free">nvidia/nemotron-3.5-super-vl:free</option>
+              <option value="stepfun/step-3.7-flash:free">stepfun/step-3.7-flash:free</option>
+              <option value="stealth/glyph-cluster">stealth/glyph-cluster</option>
+              <option value="poolside/laguna-xs-2.1:free">poolside/laguna-xs-2.1:free</option>
+            </select>
+            <div class="model-chips" id="kilo-model-chips"></div>
+            <div class="notice">Model free terdeteksi dinamis dari katalog resmi Kilo Gateway. Klik chip di atas untuk memilih cepat.</div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-save-kilo-model" style="width: 100%; margin-bottom: 16px; background: linear-gradient(135deg, var(--accent-green), #059669);">💾 Simpan Model Default Kilo</button>
+
+          <div class="form-group">
+            <label>Kilo Integration Endpoints</label>
+            <div style="font-family: var(--font-mono); font-size: 11px; background: var(--code-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-muted);">
+              <div><strong style="color: var(--accent-green);">Dedicated Kilo:</strong> http://127.0.0.1:20144/v2/kilo/chat/completions</div>
+              <div style="margin-top: 4px;"><strong style="color: var(--accent-cyan);">OpenAI Drop-in:</strong> http://127.0.0.1:20144/v1/chat/completions (Auto-routed)</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Kilo Playground Card -->
+        <div class="card">
+          <div class="section-title">
+            <span>🧪 Kilo Live Stream Tester (Playground)</span>
+          </div>
+
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="kilo-test-model-select" style="margin-bottom: 0;">Target Kilo Model to Test</label>
+              <button type="button" class="copy-btn" id="btn-copy-kilo-test-model" title="Copy model ID">📋 Copy ID</button>
+            </div>
+            <select id="kilo-test-model-select">
+              <option value="openrouter/free">openrouter/free</option>
+              <option value="kilo-auto/free">kilo-auto/free</option>
+              <option value="nvidia/nemotron-3-ultra-550b-a55b:free">nvidia/nemotron-3-ultra-550b-a55b:free</option>
+              <option value="nvidia/nemotron-3.5-super-vl:free">nvidia/nemotron-3.5-super-vl:free</option>
+              <option value="stepfun/step-3.7-flash:free">stepfun/step-3.7-flash:free</option>
+              <option value="stealth/glyph-cluster">stealth/glyph-cluster</option>
+              <option value="poolside/laguna-xs-2.1:free">poolside/laguna-xs-2.1:free</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="kilo-test-prompt">Prompt Message</label>
+            <textarea id="kilo-test-prompt" rows="2" placeholder="Enter prompt...">Halo! Jelaskan perbedaan mendasar antara model LLM dense vs MoE (Mixture of Experts) dalam 2 paragraf singkat.</textarea>
+          </div>
+
+          <!-- Presets Cepat -->
+          <div style="margin-bottom: 14px;">
+            <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">💡 Preset Prompt Cepat:</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button type="button" class="copy-btn preset-kilo-btn" data-preset="nalar" style="font-size: 11px;">🧠 Uji Penalaran &amp; Reasoning</button>
+              <button type="button" class="copy-btn preset-kilo-btn" data-preset="coding" style="font-size: 11px;">💻 Coding Go / Python</button>
+              <button type="button" class="copy-btn preset-kilo-btn" data-preset="identitas" style="font-size: 11px;">🎭 Cek Identitas Model</button>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-kilo-test" style="width: 100%; margin-bottom: 12px; background: linear-gradient(135deg, var(--accent-green), #059669);">
+            <span>▶ Stream Test via Kilo Gateway</span>
+          </button>
+
+          <div class="form-group">
+            <label>Live SSE Stream Output</label>
+            <div class="terminal-box" id="kilo-test-output">Waiting for Kilo test run...</div>
+            <div id="kilo-test-stats" style="font-size: 11px; color: var(--accent-green); margin-top: 6px; font-family: var(--font-mono);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Puter AI Hub -->
+    <div class="tab-pane" id="tab-puter">
+      <!-- Puter Multi-Account Pool Card -->
+      <div class="card" style="margin-bottom: 20px; border-color: rgba(139, 92, 246, 0.35); background: rgba(139, 92, 246, 0.06);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px; margin-bottom: 14px;">
+          <div>
+            <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
+              <span>🟣 Puter Multi-Account Pool &amp; Smart Failover</span>
+              <span id="pool-accounts-count" class="badge-puter-status active" style="font-size: 10px;">0 Akun</span>
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
+              Request diprioritaskan ke akun <strong>Primary</strong> (1,000 kredit gratis). Jika kredit habis (HTTP 402) atau rate-limited (HTTP 429), gateway otomatis <strong>failover transparan</strong> ke akun Standby berikutnya tanpa memutus koneksi Cline!
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <button type="button" class="btn btn-primary" id="btn-add-account-popup" style="background: linear-gradient(135deg, var(--accent-purple), #6366f1); padding: 7px 14px; font-size: 12px;">
+              🔑 Tambah Akun (Popup Login)
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-toggle-manual-form" style="padding: 7px 14px; font-size: 12px;">
+              ➕ Input Token Manual
+            </button>
+          </div>
+        </div>
+
+        <!-- Manual Account Add Form (Collapsible) -->
+        <div id="form-manual-account" style="display: none; background: rgba(0,0,0,0.25); border: 1px dashed var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px;">
+          <div style="font-size: 12px; font-weight: 600; color: var(--accent-cyan); margin-bottom: 10px;">Tambah Akun Puter Secara Manual:</div>
+          <div style="display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; align-items: flex-end;">
+            <div>
+              <label for="manual-acc-username" style="font-size: 11px;">Username / Label</label>
+              <input type="text" id="manual-acc-username" placeholder="misal: akun_kedua" style="font-size: 12px; padding: 7px 10px;">
+            </div>
+            <div>
+              <label for="manual-acc-token" style="font-size: 11px;">Auth Token Puter</label>
+              <input type="password" id="manual-acc-token" placeholder="Masukkan token puter..." style="font-size: 12px; padding: 7px 10px;">
+            </div>
+            <div>
+              <button type="button" class="btn btn-primary" id="btn-submit-manual-account" style="padding: 7px 16px; font-size: 12px;">
+                💾 Simpan ke Pool
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Accounts Pool Table -->
+        <div style="overflow-x: auto;">
+          <table class="pool-table" id="table-puter-accounts">
+            <thead>
+              <tr>
+                <th style="width: 50px;">Prio</th>
+                <th>Username / ID</th>
+                <th>Status Pool</th>
+                <th>Terakhir Digunakan</th>
+                <th style="text-align: right;">Aksi Kontrol</th>
+              </tr>
+            </thead>
+            <tbody id="tbody-puter-accounts">
+              <tr>
+                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 16px;">Memuat daftar akun Puter...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section-grid">
+        <!-- Puter Settings Card -->
+        <div class="card">
+          <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>🟣 Puter Model &amp; Routing Settings</span>
+          </div>
+
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="puter-model-select" style="margin-bottom: 0;">Puter Default Model</label>
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="copy-btn" id="btn-refresh-puter-models" title="Fetch live models from Puter catalog in real-time">🔄 Refresh</button>
+                <button type="button" class="copy-btn" id="btn-copy-puter-model" title="Copy model ID">📋 Copy ID</button>
+              </div>
+            </div>
+            <select id="puter-model-select">
+              <option value="claude-opus-5-5">claude-opus-5-5</option>
+              <option value="claude-sonnet-5-5">claude-sonnet-5-5</option>
+              <option value="claude-opus-5">claude-opus-5</option>
+              <option value="claude-haiku-5-5">claude-haiku-5-5</option>
+              <option value="claude-fable-5">claude-fable-5</option>
+              <option value="gpt-4o">gpt-4o</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="deepseek-v4.1-flash">deepseek-v4.1-flash</option>
+            </select>
+            <div class="model-chips" id="puter-model-chips"></div>
+            <div class="notice">Semua model Puter terdeteksi dinamis dari katalog resmi Puter.com (900+ model). Klik chip di atas untuk memilih cepat.</div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-save-puter-model" style="width: 100%; margin-bottom: 16px;">💾 Simpan Model Default Puter</button>
+
+          <div class="form-group">
+            <label>Puter Integration Endpoints</label>
+            <div style="font-family: var(--font-mono); font-size: 11px; background: var(--code-bg); padding: 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text-muted);">
+              <div><strong style="color: var(--accent-purple);">Dedicated:</strong> http://127.0.0.1:20144/v2/puter/chat/completions</div>
+              <div style="margin-top: 4px;"><strong style="color: var(--accent-cyan);">Multi-Provider:</strong> http://127.0.0.1:20144/v2/chat/completions</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Puter Playground Card -->
+        <div class="card">
+          <div class="section-title">
+            <span>🧪 Puter Live Stream Tester</span>
+          </div>
+
+          <div class="form-group">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <label for="puter-test-model-select" style="margin-bottom: 0;">Target Puter Model to Test</label>
+              <button type="button" class="copy-btn" id="btn-copy-puter-test-model" title="Copy model ID">📋 Copy ID</button>
+            </div>
+            <select id="puter-test-model-select">
+              <option value="claude-opus-5-5">claude-opus-5-5</option>
+              <option value="claude-sonnet-5-5">claude-sonnet-5-5</option>
+              <option value="claude-opus-5">claude-opus-5</option>
+              <option value="claude-haiku-5-5">claude-haiku-5-5</option>
+              <option value="claude-fable-5">claude-fable-5</option>
+              <option value="gpt-4o">gpt-4o</option>
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="deepseek-v4.1-flash">deepseek-v4.1-flash</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="puter-test-prompt">Prompt Message</label>
+            <textarea id="puter-test-prompt" rows="2" placeholder="Enter prompt...">Siapa namamu, siapa pembuatmu, dan versi model apa kamu sebenarnya? Jawab jujur dan detail.</textarea>
+          </div>
+
+          <!-- Presets Cepat -->
+          <div style="margin-bottom: 14px;">
+            <label style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 4px;">💡 Preset Prompt Cepat:</label>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+              <button type="button" class="copy-btn preset-puter-btn" data-preset="identitas" style="font-size: 11px;">🎭 Buktikan Identitas Model</button>
+              <button type="button" class="copy-btn preset-puter-btn" data-preset="cerita" style="font-size: 11px;">📖 Cerita Pendek</button>
+              <button type="button" class="copy-btn preset-puter-btn" data-preset="coding" style="font-size: 11px;">💻 Review Coding</button>
+            </div>
+          </div>
+
+          <button class="btn btn-primary" id="btn-puter-test" style="width: 100%; margin-bottom: 12px; background: linear-gradient(135deg, var(--accent-purple), #6366f1);">
+            <span>▶ Stream Test via Puter</span>
+          </button>
+
+          <div class="form-group">
+            <label>Live SSE Stream Output</label>
+            <div class="terminal-box" id="puter-test-output">Waiting for Puter test run...</div>
+            <div id="puter-test-stats" style="font-size: 11px; color: var(--accent-purple); margin-top: 6px; font-family: var(--font-mono);"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 3: Quick Connect Guide -->
+    <div class="tab-pane" id="tab-connect">
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="section-title">
+          <span>🔌 Quick Connect for Cline, Roo Code, Cursor, Aider &amp; Agentic AI</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 16px;">
+          <!-- Section A: OpenCode Gateway -->
+          <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--border);">
+            <p style="color: var(--accent-cyan); font-weight: 700; margin-bottom: 8px;">1. OpenCode Gateway (Default Free Tier):</p>
+            <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-base-url">http://127.0.0.1:20144/v1</span> <button type="button" class="copy-btn" id="btn-copy-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;" id="quick-api-key">sk-opencode-free</span> <button type="button" class="copy-btn" id="btn-copy-api-key" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p>Model ID: <span id="quick-model-id" style="color: #38bdf8; font-weight: 600;">big-pickle</span> <button type="button" class="copy-btn" id="btn-copy-quick-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+          </div>
+
+          <!-- Section B: Kilo Dedicated -->
+          <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 16px; border-radius: 8px; border: 1px solid rgba(16, 185, 129, 0.35);">
+            <p style="color: var(--accent-green); font-weight: 700; margin-bottom: 8px;">2. Kilo AI Gateway (Keyless Free Tier Flagships):</p>
+            <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-kilo-base-url">http://127.0.0.1:20144/v2/kilo</span> <button type="button" class="copy-btn" id="btn-copy-kilo-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;">sk-opencode-free (Keyless - sembarang teks)</span></p>
+            <p>Model ID: <span id="quick-kilo-model-id" style="color: #34d399; font-weight: 600;">openrouter/free</span> <button type="button" class="copy-btn" id="btn-copy-quick-kilo-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">Model Rekomendasi: <code>nvidia/nemotron-3-ultra-550b-a55b:free</code>, <code>nvidia/nemotron-3.5-super-vl:free</code>, <code>openrouter/free</code>, <code>stepfun/step-3.7-flash:free</code></p>
+          </div>
+
+          <!-- Section C: Puter Dedicated -->
+          <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 16px; border-radius: 8px; border: 1px solid rgba(139, 92, 246, 0.35);">
+            <p style="color: var(--accent-purple); font-weight: 700; margin-bottom: 8px;">3. Puter AI Dedicated Gateway:</p>
+            <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-puter-base-url">http://127.0.0.1:20144/v2/puter</span> <button type="button" class="copy-btn" id="btn-copy-puter-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;">sk-opencode-free (atau Bearer Puter Token Anda)</span></p>
+            <p>Model ID: <span id="quick-puter-model-id" style="color: #c084fc; font-weight: 600;">claude-opus-5-5</span> <button type="button" class="copy-btn" id="btn-copy-quick-puter-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+          </div>
+
+          <!-- Section D: Generic Multi-Provider -->
+          <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 16px; border-radius: 8px; border: 1px solid var(--border);">
+            <p style="color: var(--accent-cyan); font-weight: 700; margin-bottom: 8px;">4. Generic Multi-Provider Gateway (Smart Routing):</p>
+            <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-v2-base-url">http://127.0.0.1:20144/v2</span> <button type="button" class="copy-btn" id="btn-copy-v2-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;">sk-opencode-free</span></p>
+            <p>Keterangan: Otomatis meroute model Kilo ke Kilo Gateway, Claude/Puter ke Puter AI, dan model lain ke OpenCode free tier.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Stream Telemetry & Request Inspector Table (Visible Across All Tabs) -->
+    <div class="card" style="margin-top: 24px; margin-bottom: 28px;">
       <div class="section-header-flex">
         <div class="section-title" style="margin-bottom: 0;">
-          <span>📊 Live Stream Telemetry & Request Inspector (Last 50 Requests)</span>
+          <span>📊 Live Stream Telemetry &amp; Request Inspector (Last 50 Requests)</span>
         </div>
         <div class="table-actions">
           <span class="badge-live"><span class="badge-dot"></span> Live Stream Active</span>
@@ -175,19 +521,6 @@
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
-
-    <!-- Quick Integration Guide -->
-    <div class="card">
-      <div class="section-title">
-        <span>🔌 Quick Connect for Cline & Coding Agents</span>
-      </div>
-      <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 14px; border-radius: 8px; border: 1px solid var(--border);">
-        <p style="color: var(--accent-cyan); margin-bottom: 8px;"># Setting for Cline / Roo Code / Cursor / Aider:</p>
-        <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-base-url">http://127.0.0.1:20144/v1</span> <button type="button" class="copy-btn" id="btn-copy-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
-        <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;" id="quick-api-key">sk-opencode-free</span> <button type="button" class="copy-btn" id="btn-copy-api-key" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
-        <p>Model ID: <span id="quick-model-id" style="color: #38bdf8; font-weight: 600;">deepseek-v4.1-flash-free</span> <button type="button" class="copy-btn" id="btn-copy-quick-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
       </div>
     </div>
 

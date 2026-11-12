@@ -17,6 +17,7 @@ proxy_run.log
 *.out
 *.test
 tests/logs/
+tests/scratch_kilo/
 tests/smoke/*.log
 .*.ps1
 .*.txt
@@ -24,10 +25,11 @@ tests/smoke/*.log
 # Documentation and scratch plans (local only)
 doc/
 
+# Local config containing secrets (use config.example.json as template)
+config.json
+
 # Editor and OS metadata
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
-config.json
-/config.json

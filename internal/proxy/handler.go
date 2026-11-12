@@ -83,13 +83,57 @@ func firstNonEmpty(values ...string) string {
 
 // handleChatCompletions is the single OpenAI-compatible entry point.
 func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
-	cfg := s.manager.Get()
-
 	body, err := decodeJSONBody(w, r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
+	cfg := s.manager.Get()
+	model := stringField(body, "model")
+	if cfg.KiloEnabled && IsKiloModel(model) {
+		s.forwardKiloChat(w, r, body)
+		return
+	}
+	if cfg.PuterEnabled && IsPuterModel(model) {
+		s.forwardPuterChat(w, r, body)
+		return
+	}
+	s.forwardOpenCodeChat(w, r, body)
+}
+
+// handleV2ChatCompletions routes generic v2 requests based on target model.
+func (s *Server) handleV2ChatCompletions(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeJSONBody(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	cfg := s.manager.Get()
+	model := stringField(body, "model")
+	if cfg.KiloEnabled && IsKiloModel(model) {
+		s.forwardKiloChat(w, r, body)
+		return
+	}
+	if cfg.PuterEnabled && IsPuterModel(model) {
+		s.forwardPuterChat(w, r, body)
+		return
+	}
+	s.forwardOpenCodeChat(w, r, body)
+}
+
+// handlePuterChatCompletions explicitly forces Puter AI provider.
+func (s *Server) handlePuterChatCompletions(w http.ResponseWriter, r *http.Request) {
+	body, err := decodeJSONBody(w, r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	s.forwardPuterChat(w, r, body)
+}
+
+// forwardOpenCodeChat executes the existing OpenCode proxy pipeline.
+func (s *Server) forwardOpenCodeChat(w http.ResponseWriter, r *http.Request, body map[string]any) {
+	cfg := s.manager.Get()
 
 	prepared, err := Prepare(cfg, body)
 	if err != nil {

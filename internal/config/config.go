@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Environment overrides.
@@ -36,6 +38,24 @@ type Config struct {
 	AntiAbuseEnabled       bool              `json:"anti_abuse_enabled"`
 	MaxConcurrentPerNode   int               `json:"max_concurrent_per_node"`
 	MinRequestIntervalMs   int               `json:"min_request_interval_ms"`
+	PuterAPIKey            string            `json:"puter_api_key"`
+	PuterEnabled           bool              `json:"puter_enabled"`
+	PuterDefaultModel      string            `json:"puter_default_model"`
+	PuterAccounts          []PuterAccount    `json:"puter_accounts"`
+	KiloEnabled            bool              `json:"kilo_enabled"`
+	KiloDefaultModel       string            `json:"kilo_default_model"`
+}
+
+// PuterAccount represents a Puter.com account in the multi-account pool.
+type PuterAccount struct {
+	ID            string     `json:"id"`
+	Username      string     `json:"username"`
+	Token         string     `json:"token"`
+	Status        string     `json:"status"` // "active", "cooldown", "rate_limited", "disabled"
+	Priority      int        `json:"priority"`
+	LastUsedAt    *time.Time `json:"last_used_at,omitempty"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
 }
 
 // Default returns the out-of-the-box configuration described in plan.md.
@@ -58,6 +78,12 @@ func Default() Config {
 		AntiAbuseEnabled:       true,
 		MaxConcurrentPerNode:   1,
 		MinRequestIntervalMs:   300,
+		PuterAPIKey:            "",
+		PuterEnabled:           false,
+		PuterDefaultModel:      "claude-opus-5-5",
+		PuterAccounts:          []PuterAccount{},
+		KiloEnabled:            true,
+		KiloDefaultModel:       "openrouter/free",
 	}
 }
 
@@ -69,6 +95,10 @@ func (c Config) Clone() Config {
 	out.ModelAliases = make(map[string]string, len(c.ModelAliases))
 	for k, v := range c.ModelAliases {
 		out.ModelAliases[k] = v
+	}
+	if len(c.PuterAccounts) > 0 {
+		out.PuterAccounts = make([]PuterAccount, len(c.PuterAccounts))
+		copy(out.PuterAccounts, c.PuterAccounts)
 	}
 	return out
 }
@@ -128,6 +158,53 @@ func (c *Config) Normalize() {
 	}
 	if c.MinRequestIntervalMs <= 0 {
 		c.MinRequestIntervalMs = def.MinRequestIntervalMs
+	}
+	if strings.TrimSpace(c.PuterDefaultModel) == "" {
+		c.PuterDefaultModel = def.PuterDefaultModel
+	}
+	if strings.TrimSpace(c.KiloDefaultModel) == "" {
+		c.KiloDefaultModel = def.KiloDefaultModel
+	}
+	c.PuterAPIKey = strings.TrimSpace(c.PuterAPIKey)
+
+	// Auto-migration: if PuterAPIKey exists but PuterAccounts is empty, populate PuterAccounts
+	if len(c.PuterAccounts) == 0 && c.PuterAPIKey != "" {
+		c.PuterAccounts = append(c.PuterAccounts, PuterAccount{
+			ID:       "acc-default",
+			Username: "default",
+			Token:    c.PuterAPIKey,
+			Status:   "active",
+			Priority: 1,
+		})
+	}
+
+	// Sanitize accounts
+	validAccs := make([]PuterAccount, 0, len(c.PuterAccounts))
+	for i, acc := range c.PuterAccounts {
+		acc.ID = strings.TrimSpace(acc.ID)
+		if acc.ID == "" {
+			acc.ID = fmt.Sprintf("acc-%d", i+1)
+		}
+		acc.Username = strings.TrimSpace(acc.Username)
+		if acc.Username == "" {
+			acc.Username = fmt.Sprintf("account_%d", i+1)
+		}
+		acc.Token = strings.TrimSpace(acc.Token)
+		if acc.Token == "" {
+			continue
+		}
+		acc.Status = strings.ToLower(strings.TrimSpace(acc.Status))
+		if acc.Status == "" {
+			acc.Status = "active"
+		}
+		if acc.Priority <= 0 {
+			acc.Priority = i + 1
+		}
+		validAccs = append(validAccs, acc)
+	}
+	c.PuterAccounts = validAccs
+	if len(c.PuterAccounts) > 0 && c.PuterAPIKey == "" {
+		c.PuterAPIKey = c.PuterAccounts[0].Token
 	}
 }
 
@@ -319,4 +396,200 @@ func (m *Manager) persist(cfg Config) error {
 		return fmt.Errorf("replace config: %w", err)
 	}
 	return nil
+}
+
+// GetPuterAccounts returns all configured Puter accounts sorted by priority.
+func (m *Manager) GetPuterAccounts() []PuterAccount {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	res := make([]PuterAccount, len(m.cfg.PuterAccounts))
+	copy(res, m.cfg.PuterAccounts)
+	sort.SliceStable(res, func(i, j int) bool {
+		return res[i].Priority < res[j].Priority
+	})
+	return res
+}
+
+// GetActivePuterAccountCandidates returns all candidate accounts ready for traffic,
+// auto-clearing expired cooldowns, sorted by priority.
+func (m *Manager) GetActivePuterAccountCandidates() []PuterAccount {
+	m.mu.Lock()
+	now := time.Now()
+	var mutated bool
+	for i := range m.cfg.PuterAccounts {
+		acc := &m.cfg.PuterAccounts[i]
+		if (acc.Status == "cooldown" || acc.Status == "rate_limited") && acc.CooldownUntil != nil && now.After(*acc.CooldownUntil) {
+			acc.Status = "active"
+			acc.CooldownUntil = nil
+			mutated = true
+		}
+	}
+	if mutated {
+		_ = m.persist(m.cfg)
+	}
+
+	var candidates []PuterAccount
+	for _, acc := range m.cfg.PuterAccounts {
+		if acc.Status == "active" && acc.Token != "" {
+			candidates = append(candidates, acc)
+		}
+	}
+	m.mu.Unlock()
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].Priority < candidates[j].Priority
+	})
+	return candidates
+}
+
+// MarkPuterAccountStatus updates status, cooldown duration, and error message for an account.
+func (m *Manager) MarkPuterAccountStatus(accountID string, status string, cooldownDuration time.Duration, lastErr string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.cfg.PuterAccounts {
+		if m.cfg.PuterAccounts[i].ID == accountID {
+			m.cfg.PuterAccounts[i].Status = status
+			m.cfg.PuterAccounts[i].LastError = lastErr
+			if cooldownDuration > 0 {
+				until := time.Now().Add(cooldownDuration)
+				m.cfg.PuterAccounts[i].CooldownUntil = &until
+			} else {
+				m.cfg.PuterAccounts[i].CooldownUntil = nil
+			}
+			now := time.Now()
+			m.cfg.PuterAccounts[i].LastUsedAt = &now
+			_ = m.persist(m.cfg)
+			break
+		}
+	}
+}
+
+// RecordPuterAccountUsage marks last used time for an account.
+func (m *Manager) RecordPuterAccountUsage(accountID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.cfg.PuterAccounts {
+		if m.cfg.PuterAccounts[i].ID == accountID {
+			now := time.Now()
+			m.cfg.PuterAccounts[i].LastUsedAt = &now
+			_ = m.persist(m.cfg)
+			break
+		}
+	}
+}
+
+// AddOrUpdatePuterAccount adds a new account or updates an existing one by ID or Username.
+func (m *Manager) AddOrUpdatePuterAccount(acc PuterAccount) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	acc.Token = strings.TrimSpace(acc.Token)
+	if acc.Token == "" {
+		return fmt.Errorf("token cannot be empty")
+	}
+	if strings.TrimSpace(acc.Username) == "" {
+		acc.Username = "user_" + fmt.Sprintf("%d", time.Now().Unix()%10000)
+	}
+	if strings.TrimSpace(acc.ID) == "" {
+		acc.ID = "acc_" + fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+	}
+	if acc.Status == "" {
+		acc.Status = "active"
+	}
+
+	found := false
+	for i := range m.cfg.PuterAccounts {
+		if m.cfg.PuterAccounts[i].ID == acc.ID || (acc.Username != "" && m.cfg.PuterAccounts[i].Username == acc.Username) {
+			m.cfg.PuterAccounts[i].Token = acc.Token
+			m.cfg.PuterAccounts[i].Username = acc.Username
+			if acc.Status != "" {
+				m.cfg.PuterAccounts[i].Status = acc.Status
+			}
+			if acc.Priority > 0 {
+				m.cfg.PuterAccounts[i].Priority = acc.Priority
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		if acc.Priority <= 0 {
+			acc.Priority = len(m.cfg.PuterAccounts) + 1
+		}
+		m.cfg.PuterAccounts = append(m.cfg.PuterAccounts, acc)
+	}
+
+	if len(m.cfg.PuterAccounts) > 0 {
+		m.cfg.PuterAPIKey = m.cfg.PuterAccounts[0].Token
+	}
+
+	return m.persist(m.cfg)
+}
+
+// DeletePuterAccount removes an account by ID.
+func (m *Manager) DeletePuterAccount(accountID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var updated []PuterAccount
+	for _, acc := range m.cfg.PuterAccounts {
+		if acc.ID != accountID {
+			updated = append(updated, acc)
+		}
+	}
+	m.cfg.PuterAccounts = updated
+	if len(m.cfg.PuterAccounts) > 0 {
+		m.cfg.PuterAPIKey = m.cfg.PuterAccounts[0].Token
+	} else {
+		m.cfg.PuterAPIKey = ""
+	}
+	return m.persist(m.cfg)
+}
+
+// SetPuterAccountPriority changes priority for an account and re-normalizes priorities.
+func (m *Manager) SetPuterAccountPriority(accountID string, priority int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	targetIdx := -1
+	for i, acc := range m.cfg.PuterAccounts {
+		if acc.ID == accountID {
+			targetIdx = i
+			break
+		}
+	}
+	if targetIdx == -1 {
+		return fmt.Errorf("account not found: %s", accountID)
+	}
+
+	m.cfg.PuterAccounts[targetIdx].Priority = priority
+	sort.SliceStable(m.cfg.PuterAccounts, func(i, j int) bool {
+		return m.cfg.PuterAccounts[i].Priority < m.cfg.PuterAccounts[j].Priority
+	})
+	for i := range m.cfg.PuterAccounts {
+		m.cfg.PuterAccounts[i].Priority = i + 1
+	}
+	if len(m.cfg.PuterAccounts) > 0 {
+		m.cfg.PuterAPIKey = m.cfg.PuterAccounts[0].Token
+	}
+	return m.persist(m.cfg)
+}
+
+// ResetPuterAccount clears cooldown/rate-limit status for an account.
+func (m *Manager) ResetPuterAccount(accountID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for i := range m.cfg.PuterAccounts {
+		if m.cfg.PuterAccounts[i].ID == accountID {
+			m.cfg.PuterAccounts[i].Status = "active"
+			m.cfg.PuterAccounts[i].CooldownUntil = nil
+			m.cfg.PuterAccounts[i].LastError = ""
+			return m.persist(m.cfg)
+		}
+	}
+	return fmt.Errorf("account not found: %s", accountID)
 }

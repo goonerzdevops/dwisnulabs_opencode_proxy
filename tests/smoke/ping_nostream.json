@@ -1,0 +1,10 @@
+{
+  "model": "deepseek-v4.1-flash-free",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Halo, jawab dalam 1 kalimat pendek: kamu siapa?"
+    }
+  ],
+  "stream": false
+}

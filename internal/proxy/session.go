@@ -117,6 +117,24 @@ func TranslateSessionID(sessionID, clientTool string) string {
 	return translated
 }
 
+// DropTranslatedSession removes any translated session entry matching targetSessionID.
+// Returns true if an entry was dropped.
+func DropTranslatedSession(targetSessionID string) bool {
+	if targetSessionID == "" {
+		return false
+	}
+	translatedMu.Lock()
+	defer translatedMu.Unlock()
+	dropped := false
+	for k, v := range translatedSessions {
+		if v.id == targetSessionID {
+			delete(translatedSessions, k)
+			dropped = true
+		}
+	}
+	return dropped
+}
+
 type sessionEntry struct {
 	id       string
 	lastUsed time.Time
@@ -171,6 +189,35 @@ func (s *SessionStore) Stable(identity string) string {
 	entry := &sessionEntry{id: GenerateSessionID(now.UnixMilli()), lastUsed: now}
 	s.entries[identity] = entry
 	return entry.id
+}
+
+// Drop drops any session entry matching targetSessionID from this store.
+// Returns true if at least one entry was removed.
+func (s *SessionStore) Drop(targetSessionID string) bool {
+	if s == nil || targetSessionID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dropped := false
+	for k, v := range s.entries {
+		if v.id == targetSessionID {
+			delete(s.entries, k)
+			dropped = true
+		}
+	}
+	return dropped
+}
+
+// InvalidateSession drops targetSessionID from both global translatedSessions and the SessionStore.
+// Returns true if the session ID was found and removed from either cache.
+func InvalidateSession(targetSessionID string, store *SessionStore) bool {
+	d1 := DropTranslatedSession(targetSessionID)
+	d2 := false
+	if store != nil {
+		d2 = store.Drop(targetSessionID)
+	}
+	return d1 || d2
 }
 
 // Len reports the number of live sessions (telemetry only).

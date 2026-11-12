@@ -7,22 +7,38 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"strings"
+	"time"
 
 	"opencode-proxy/internal/config"
 )
 
 // Upstream posts fingerprint-shaped requests to the OpenCode free tier.
 type Upstream struct {
-	pool *ProxyPool
+	pool         *ProxyPool
+	logger       *log.Logger
+	sessionStore *SessionStore
 }
 
 // NewUpstream builds an Upstream client backed by an outbound ProxyPool.
-func NewUpstream(cfg config.Config, logger *log.Logger) *Upstream {
-	return &Upstream{
-		pool: NewProxyPool(cfg, logger),
+// Optionally accepts a SessionStore for automatic rejection invalidation.
+func NewUpstream(cfg config.Config, logger *log.Logger, sessionStore ...*SessionStore) *Upstream {
+	var store *SessionStore
+	if len(sessionStore) > 0 {
+		store = sessionStore[0]
 	}
+	return &Upstream{
+		pool:         NewProxyPool(cfg, logger),
+		logger:       logger,
+		sessionStore: store,
+	}
+}
+
+// SetSessionStore assigns the session store to enable automatic session invalidation.
+func (u *Upstream) SetSessionStore(store *SessionStore) {
+	u.sessionStore = store
 }
 
 // SyncConfig syncs the proxy pool with the new configuration.
@@ -79,8 +95,16 @@ func (u *Upstream) applyHeaders(header http.Header, stream bool, fp Fingerprint)
 	}
 }
 
+// isOverload429 checks if an upstream 429 response indicates transient server overload.
+func isOverload429(body []byte) bool {
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "overloaded")
+}
+
 // Send posts the prepared body and returns the raw upstream response. The caller
-// owns the response body. If a proxy node hits 429 or 403, it automatically fails over.
+// owns the response body. If upstream returns a transient overload 429 ("The inference
+// service is overloaded"), it automatically retries with exponential backoff (up to 5 retries).
+// If it returns 403 (FreeTierError) or non-overload 429 (quota limit), the rejected session is dropped.
 func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *PreparedRequest, fp Fingerprint) (*http.Response, error) {
 	payload, err := json.Marshal(prepared.Body)
 	if err != nil {
@@ -97,10 +121,66 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 		return req, nil
 	}
 
-	response, _, err := u.pool.DoWithFailover(ctx, cfg, reqFactory)
-	if err != nil {
-		return nil, fmt.Errorf("upstream request failed: %w", err)
+	delays := []time.Duration{
+		800 * time.Millisecond,
+		1400 * time.Millisecond,
+		2200 * time.Millisecond,
+		3200 * time.Millisecond,
+		4500 * time.Millisecond,
 	}
+
+	var response *http.Response
+	for attempt := 0; attempt <= len(delays); attempt++ {
+		resp, _, err := u.pool.DoWithFailover(ctx, cfg, reqFactory)
+		if err != nil {
+			return nil, fmt.Errorf("upstream request failed: %w", err)
+		}
+		response = resp
+
+		if resp.StatusCode == http.StatusOK {
+			return response, nil
+		}
+
+		// Snapshot error body for classification (up to 4KB)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+
+		// 1. Transient overload 429 retry
+		if resp.StatusCode == http.StatusTooManyRequests && isOverload429(bodyBytes) {
+			if attempt < len(delays) {
+				backoff := delays[attempt] + time.Duration(rand.Intn(250))*time.Millisecond
+				if u.logger != nil {
+					u.logger.Printf("[overload-retry] upstream inference overloaded (attempt %d/%d), retrying in %v...", attempt+1, len(delays), backoff)
+				}
+				select {
+				case <-time.After(backoff):
+					continue
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			if u.logger != nil {
+				u.logger.Printf("[overload-retry] upstream inference still overloaded after %d retry attempts", len(delays))
+			}
+			response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			return response, nil
+		}
+
+		// 2. Spent/rejected session drop (HTTP 403 FreeTierError or quota 429 FreeUsageLimitError)
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+			if fp.SessionID != "" {
+				InvalidateSession(fp.SessionID, u.sessionStore)
+				if u.logger != nil {
+					u.logger.Printf("[session-drop] upstream rejected session %s (HTTP %d), invalidated from cache for future requests", fp.SessionID, resp.StatusCode)
+				}
+			}
+		}
+
+		// Non-retryable error: restore response body and return
+		response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		return response, nil
+	}
+
 	return response, nil
 }
 
@@ -133,6 +213,11 @@ func (u *Upstream) FetchModels(ctx context.Context, cfg config.Config, fp Finger
 			continue
 		}
 		if response.StatusCode != http.StatusOK {
+			if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests {
+				if fp.SessionID != "" {
+					InvalidateSession(fp.SessionID, u.sessionStore)
+				}
+			}
 			lastErr = fmt.Errorf("%s returned %d: %s", path, response.StatusCode, truncate(string(blob), 200))
 			continue
 		}

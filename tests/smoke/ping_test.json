@@ -1,0 +1,10 @@
+{
+  "model": "deepseek-v4.1-flash-free",
+  "stream": true,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Halo, perkenalkan dirimu dalam 1 kalimat singkat!"
+    }
+  ]
+}
