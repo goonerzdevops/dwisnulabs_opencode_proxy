@@ -16,12 +16,17 @@ proxy_run.log
 # Temporary test and probe artifacts
 *.out
 *.test
-.smoke/
+tests/logs/
+tests/smoke/*.log
 .*.ps1
 .*.txt
+
+# Documentation and scratch plans (local only)
+doc/
 
 # Editor and OS metadata
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+config.json
