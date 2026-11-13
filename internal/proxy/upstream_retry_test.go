@@ -1,9 +1,14 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,5 +211,98 @@ func TestOverload429ContextCancellation(t *testing.T) {
 	_, err := up.Send(ctx, cfg, prepared, Fingerprint{SessionID: "ses_abort"})
 	if err == nil {
 		t.Fatalf("expected context cancellation error, got nil")
+	}
+}
+
+func TestHandlerToolConcealRetryOn429(t *testing.T) {
+	mgr, err := config.NewManager(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	srv := NewServer(mgr, nil)
+	defer srv.Close()
+
+	var attempts atomic.Int32
+	var seenSessions [2]string
+	var seenTools [2][]string
+
+	srv.upstream.pool.mu.Lock()
+	srv.upstream.pool.nodes[0].tlsClient = nil
+	srv.upstream.pool.nodes[0].client = &http.Client{
+		Transport: &mockRoundTripper{
+			roundTrip: func(req *http.Request) (*http.Response, error) {
+				idx := attempts.Add(1) - 1
+				raw, _ := io.ReadAll(req.Body)
+				var body map[string]any
+				_ = json.Unmarshal(raw, &body)
+
+				if idx < 2 {
+					seenSessions[idx] = req.Header.Get("x-opencode-session")
+					if tools, ok := body["tools"].([]any); ok {
+						for _, item := range tools {
+							name := item.(map[string]any)["function"].(map[string]any)["name"].(string)
+							seenTools[idx] = append(seenTools[idx], name)
+						}
+					}
+				}
+
+				rec := httptest.NewRecorder()
+				if idx == 0 {
+					rec.WriteHeader(http.StatusTooManyRequests)
+					rec.WriteString(`{"type":"error","error":{"type":"FreeUsageLimitError","message":"Free usage limit reached."}}`)
+					return rec.Result(), nil
+				}
+				rec.Header().Set("Content-Type", "text/event-stream")
+				rec.WriteHeader(http.StatusOK)
+				rec.WriteString("data: {\"id\":\"chatcmpl-ok\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"glm-5.3-flash-free\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"fn_1\",\"arguments\":\"{\\\"command\\\":\\\"ls\\\"}\"}}]}}]}\n\n")
+				rec.WriteString("data: [DONE]\n\n")
+				return rec.Result(), nil
+			},
+		},
+	}
+	srv.upstream.pool.mu.Unlock()
+
+	reqBody := map[string]any{
+		"model":  "glm-5.3-flash-free",
+		"stream": true,
+		"messages": []any{
+			map[string]any{"role": "user", "content": "list files"},
+		},
+		"tools": []any{
+			map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        "execute_command",
+					"description": "Run CLI command",
+					"parameters":  map[string]any{"type": "object", "properties": map[string]any{"command": map[string]any{"type": "string"}}},
+				},
+			},
+		},
+	}
+	payload, _ := json.Marshal(reqBody)
+	httpReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(payload))
+	httpReq.Header.Set("Authorization", "Bearer sk-opencode-free")
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httpReq)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK after tool-conceal retry, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("expected 2 upstream attempts, got %d", attempts.Load())
+	}
+	if seenSessions[0] == "" || seenSessions[1] == "" || seenSessions[0] == seenSessions[1] {
+		t.Errorf("expected fresh session on retry, got %q then %q", seenSessions[0], seenSessions[1])
+	}
+	if seenTools[0][0] != "execute_command" {
+		t.Errorf("attempt 1 should send execute_command, got %v", seenTools[0])
+	}
+	if seenTools[1][0] != "fn_1" {
+		t.Errorf("attempt 2 should send fn_1, got %v", seenTools[1])
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"execute_command"`) {
+		t.Errorf("expected SSE output to restore original tool name execute_command, got: %s", rec.Body.String())
 	}
 }

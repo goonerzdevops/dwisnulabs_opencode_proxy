@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -77,6 +78,7 @@ var fingerprintDefinitions = func() map[string]fingerprintDefinition {
 
 // unavailableNote explains client-compatibility stub tools to the model.
 const unavailableNote = "\n\nThe following tools exist only for client compatibility handshakes and are not available to you: %s. Do not call them."
+const aliasNotePrefix = "\n\nTool aliases active for this session (always call the target tool name with its own declared parameter schema): %s."
 
 // RenameMap tracks names that changed on the way upstream: sent name -> caller's
 // original name. The response side reverses it.
@@ -165,14 +167,15 @@ func buildFingerprintTool(name string, def fingerprintDefinition, flat bool) map
 func ApplyFingerprintTools(body map[string]any, flat bool) RenameMap {
 	renames := RenameMap{}
 	tools := concealFingerprintToolNames(body["tools"], renames)
-	tools = appendMissingFingerprintTools(tools, flat)
+	var appended []string
+	tools, appended = appendMissingFingerprintTools(tools, flat)
 	body["tools"] = tools
 
 	retargetToolChoice(body, renames)
 	aliasHistoryToolCalls(body, renames)
 
-	if names := stillUnavailable(appendedToolNames(tools), renames); len(names) > 0 {
-		noteUnavailableTools(body, flat, names)
+	if note := buildHandshakeNote(appended, renames); note != "" {
+		noteUnavailableTools(body, flat, note)
 	}
 
 	// Upstream free gate requires the CLI <env> marker alongside fingerprint tools
@@ -188,12 +191,94 @@ func ApplyFingerprintTools(body map[string]any, flat bool) RenameMap {
 	return renames
 }
 
-// concealFingerprintToolNames renames colliding caller tools to aliases.
+// restrictedToolAliases maps third-party tool names known to trigger
+// opencode.ai 429 FreeUsageLimitError onto semantically equivalent aliases.
+var restrictedToolAliases = map[string]string{
+	"subagent_fork":     "delegate_fork",
+	"working_directory": "workspace_dir",
+}
+
+// composeRenames merges a second rename pass (delta: newAlias -> prevSent) on
+// top of base (prevSent -> original), so Restore maps straight back to original.
+func composeRenames(base, delta RenameMap) RenameMap {
+	composed := make(RenameMap, len(base)+len(delta))
+	remapped := delta.reversed()
+	for sent, orig := range base {
+		if _, replaced := remapped[sent]; !replaced {
+			composed[sent] = orig
+		}
+	}
+	for newAlias, prevSent := range delta {
+		composed[newAlias] = base.Restore(prevSent)
+	}
+	return composed
+}
+
+// cloneToolWithName returns a shallow copy of tool with its function/top-level
+// name replaced, avoiding in-place mutation of the caller's raw slice maps.
+func cloneToolWithName(tool map[string]any, alias string) map[string]any {
+	out := make(map[string]any, len(tool))
+	for k, v := range tool {
+		out[k] = v
+	}
+	if fn, ok := tool["function"].(map[string]any); ok {
+		fnCopy := make(map[string]any, len(fn))
+		for k, v := range fn {
+			fnCopy[k] = v
+		}
+		fnCopy["name"] = alias
+		out["function"] = fnCopy
+		return out
+	}
+	out["name"] = alias
+	return out
+}
+
+func collectToolNames(raw any) map[string]bool {
+	used := map[string]bool{}
+	items, ok := raw.([]any)
+	if !ok {
+		return used
+	}
+	for _, item := range items {
+		if tool, ok := item.(map[string]any); ok {
+			if name, _ := toolNameCarrier(tool); name != "" {
+				used[strings.ToLower(strings.TrimSpace(name))] = true
+			}
+		}
+	}
+	return used
+}
+
+func pickUniqueAlias(preferred string, used map[string]bool) string {
+	candidate := preferred
+	for suffix := 2; used[strings.ToLower(candidate)]; suffix++ {
+		candidate = fmt.Sprintf("%s_%d", preferred, suffix)
+	}
+	used[strings.ToLower(candidate)] = true
+	return candidate
+}
+
+func isOpaqueFnAlias(name string) bool {
+	if !strings.HasPrefix(name, "fn_") || len(name) <= 3 {
+		return false
+	}
+	for _, r := range name[3:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// concealFingerprintToolNames renames colliding fingerprint tools and known
+// upstream-rejected caller tool names to safe aliases.
 func concealFingerprintToolNames(raw any, renames RenameMap) []any {
 	items, ok := raw.([]any)
 	if !ok {
 		return []any{}
 	}
+	used := collectToolNames(items)
 	out := make([]any, 0, len(items))
 	seq := 0
 	for _, item := range items {
@@ -202,25 +287,79 @@ func concealFingerprintToolNames(raw any, renames RenameMap) []any {
 			out = append(out, item)
 			continue
 		}
-		name, carrier := toolNameCarrier(tool)
+		name, _ := toolNameCarrier(tool)
 		key := fingerprintKey(name)
-		if key == "" || matchesFingerprint(tool, fingerprintDefinitions[key]) {
-			out = append(out, tool)
+		if key != "" {
+			if matchesFingerprint(tool, fingerprintDefinitions[key]) {
+				out = append(out, tool)
+				continue
+			}
+			seq++
+			alias := pickUniqueAlias(aliasToolName(name, seq), used)
+			renames[alias] = name
+			out = append(out, cloneToolWithName(tool, alias))
 			continue
 		}
-		seq++
-		alias := aliasToolName(name, seq)
-		carrier["name"] = alias
-		renames[alias] = name
+		if preferred, flagged := restrictedToolAliases[strings.ToLower(strings.TrimSpace(name))]; flagged {
+			alias := pickUniqueAlias(preferred, used)
+			renames[alias] = name
+			out = append(out, cloneToolWithName(tool, alias))
+			continue
+		}
 		out = append(out, tool)
 	}
 	return out
 }
 
+// ConcealAllCallerTools rewrites any non-fingerprint caller tools onto neutral
+// fn_<N> aliases and updates tool_choice, history, and Renames. Used as a
+// universal fallback when upstream rejects third-party tool names (e.g. DSH or Cline).
+func ConcealAllCallerTools(req *PreparedRequest) bool {
+	if req == nil || req.Body == nil {
+		return false
+	}
+	items, ok := req.Body["tools"].([]any)
+	if !ok || len(items) == 0 {
+		return false
+	}
+	used := collectToolNames(items)
+	delta := RenameMap{}
+	out := make([]any, 0, len(items))
+	seq := 0
+	for _, item := range items {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		name, _ := toolNameCarrier(tool)
+		if key := fingerprintKey(name); key != "" && matchesFingerprint(tool, fingerprintDefinitions[key]) {
+			out = append(out, tool)
+			continue
+		}
+		if isOpaqueFnAlias(name) {
+			out = append(out, tool)
+			continue
+		}
+		seq++
+		alias := pickUniqueAlias(fmt.Sprintf("fn_%d", seq), used)
+		delta[alias] = name
+		out = append(out, cloneToolWithName(tool, alias))
+	}
+	if len(delta) == 0 {
+		return false
+	}
+	req.Body["tools"] = out
+	retargetToolChoice(req.Body, delta)
+	aliasHistoryToolCalls(req.Body, delta)
+	req.Renames = composeRenames(req.Renames, delta)
+	return true
+}
+
 // appendMissingFingerprintTools adds any fingerprint definition the request is
-// still missing. The gate demands both names on every call, including calls that
-// already carry a full agent toolset.
-func appendMissingFingerprintTools(tools []any, flat bool) []any {
+// still missing and returns the newly injected stub names. The gate demands both
+// names on every call, including calls that already carry a full agent toolset.
+func appendMissingFingerprintTools(tools []any, flat bool) ([]any, []string) {
 	present := map[string]bool{}
 	for _, item := range tools {
 		tool, ok := item.(map[string]any)
@@ -233,44 +372,34 @@ func appendMissingFingerprintTools(tools []any, flat bool) []any {
 			present[key] = true
 		}
 	}
+	var appended []string
 	for _, name := range FingerprintToolNames {
 		if present[name] {
 			continue
 		}
 		tools = append(tools, buildFingerprintTool(name, fingerprintDefinitions[name], flat))
+		appended = append(appended, name)
 	}
-	return tools
+	return tools, appended
 }
 
-func appendedToolNames(tools []any) []string {
-	var names []string
-	for _, item := range tools {
-		tool, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		name, _ := toolNameCarrier(tool)
-		if key := fingerprintKey(name); key != "" {
-			names = append(names, key)
-		}
+// buildHandshakeNote marks every injected stub (including stubs that shadow a
+// caller tool aliased to hidden_*) as non-callable and lists active aliases
+// deterministically so the model calls the real tool schema on the first try.
+func buildHandshakeNote(appended []string, renames RenameMap) string {
+	var note strings.Builder
+	if len(appended) > 0 {
+		note.WriteString(fmt.Sprintf(unavailableNote, strings.Join(appended, ", ")))
 	}
-	return names
-}
-
-// stillUnavailable drops names that the caller really did supply (they merely
-// travelled under an alias), so the model is not told to avoid a usable tool.
-func stillUnavailable(appended []string, renames RenameMap) []string {
-	concealed := map[string]bool{}
-	for _, original := range renames {
-		concealed[strings.ToLower(original)] = true
-	}
-	var out []string
-	for _, name := range appended {
-		if !concealed[name] {
-			out = append(out, name)
+	if len(renames) > 0 {
+		pairs := make([]string, 0, len(renames))
+		for sent, orig := range renames {
+			pairs = append(pairs, fmt.Sprintf("%q -> %q", orig, sent))
 		}
+		sort.Strings(pairs)
+		note.WriteString(fmt.Sprintf(aliasNotePrefix, strings.Join(pairs, "; ")))
 	}
-	return out
+	return note.String()
 }
 
 // retargetToolChoice points an explicit tool_choice at the alias name.
@@ -312,6 +441,11 @@ func aliasHistoryToolCalls(body map[string]any, renames RenameMap) {
 			if !ok {
 				continue
 			}
+			if role, _ := message["role"].(string); role == "tool" {
+				if name, _ := message["name"].(string); reverse[name] != "" {
+					message["name"] = reverse[name]
+				}
+			}
 			calls, ok := message["tool_calls"].([]any)
 			if !ok {
 				continue
@@ -349,8 +483,7 @@ func aliasHistoryToolCalls(body map[string]any, renames RenameMap) {
 }
 
 // noteUnavailableTools tells the model the stubs are handshake-only.
-func noteUnavailableTools(body map[string]any, flat bool, names []string) {
-	note := fmt.Sprintf(unavailableNote, strings.Join(names, ", "))
+func noteUnavailableTools(body map[string]any, flat bool, note string) {
 	inline := strings.TrimPrefix(note, "\n\n")
 
 	if flat {

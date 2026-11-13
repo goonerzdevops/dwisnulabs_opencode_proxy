@@ -291,66 +291,45 @@
 
     <!-- TAB 3: Puter AI Hub -->
     <div class="tab-pane" id="tab-puter">
-      <!-- Puter Multi-Account Pool Card -->
-      <div class="card" style="margin-bottom: 20px; border-color: rgba(139, 92, 246, 0.35); background: rgba(139, 92, 246, 0.06);">
+      <!-- Puter Browser Relay Bridge & Auth Card -->
+      <div class="card" style="margin-bottom: 20px; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.05);">
         <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 14px; margin-bottom: 14px;">
           <div>
             <div style="font-size: 16px; font-weight: 700; color: #fff; display: flex; align-items: center; gap: 8px;">
-              <span>🟣 Puter Multi-Account Pool &amp; Smart Failover</span>
-              <span id="pool-accounts-count" class="badge-puter-status active" style="font-size: 10px;">0 Akun</span>
+              <span id="relay-status-dot" style="width: 12px; height: 12px; border-radius: 50%; background: #10b981; display: inline-block; box-shadow: 0 0 10px #10b981;"></span>
+              <span>🚀 Puter Browser Relay Bridge (100% Keyless)</span>
+              <span id="relay-status-badge" class="badge-puter-status active" style="font-size: 11px;">Menghubungkan...</span>
             </div>
-            <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">
-              Request diprioritaskan ke akun <strong>Primary</strong> (1,000 kredit gratis). Jika kredit habis (HTTP 402) atau rate-limited (HTTP 429), gateway otomatis <strong>failover transparan</strong> ke akun Standby berikutnya tanpa memutus koneksi Cline!
+            <div style="font-size: 13px; color: var(--text-muted); margin-top: 6px;" id="relay-status-desc">
+              Puter AI kini 100% menggunakan <strong>Browser Relay SDK (puter.js)</strong> langsung di browser Anda. Tidak memerlukan API key atau langganan premium Puter. Anda mendapatkan <strong>1.000 kredit gratis per bulan</strong> selama tab ini terbuka!
             </div>
           </div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <button type="button" class="btn btn-primary" id="btn-add-account-popup" style="background: linear-gradient(135deg, var(--accent-purple), #6366f1); padding: 7px 14px; font-size: 12px;">
-              🔑 Tambah Akun (Popup Login)
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;" id="relay-auth-actions">
+            <button type="button" class="btn btn-primary" id="btn-puter-login" style="background: linear-gradient(135deg, var(--accent-purple), #6366f1); padding: 8px 16px; font-size: 12px;">
+              🔑 Login ke Puter (Popup)
             </button>
-            <button type="button" class="btn btn-secondary" id="btn-toggle-manual-form" style="padding: 7px 14px; font-size: 12px;">
-              ➕ Input Token Manual
+            <button type="button" class="btn btn-secondary" id="btn-puter-switch" style="display: none; padding: 8px 14px; font-size: 12px;">
+              🔄 Ganti Akun
+            </button>
+            <button type="button" class="btn btn-secondary" id="btn-puter-logout" style="display: none; padding: 8px 14px; font-size: 12px; color: #ef4444; border-color: rgba(239, 68, 68, 0.4);">
+              🚪 Logout
             </button>
           </div>
         </div>
 
-        <!-- Manual Account Add Form (Collapsible) -->
-        <div id="form-manual-account" style="display: none; background: rgba(0,0,0,0.25); border: 1px dashed var(--border); border-radius: 8px; padding: 14px; margin-bottom: 14px;">
-          <div style="font-size: 12px; font-weight: 600; color: var(--accent-cyan); margin-bottom: 10px;">Tambah Akun Puter Secara Manual:</div>
-          <div style="display: grid; grid-template-columns: 1fr 2fr auto; gap: 10px; align-items: flex-end;">
-            <div>
-              <label for="manual-acc-username" style="font-size: 11px;">Username / Label</label>
-              <input type="text" id="manual-acc-username" placeholder="misal: akun_kedua" style="font-size: 12px; padding: 7px 10px;">
-            </div>
-            <div>
-              <label for="manual-acc-token" style="font-size: 11px;">Auth Token Puter</label>
-              <input type="password" id="manual-acc-token" placeholder="Masukkan token puter..." style="font-size: 12px; padding: 7px 10px;">
-            </div>
-            <div>
-              <button type="button" class="btn btn-primary" id="btn-submit-manual-account" style="padding: 7px 16px; font-size: 12px;">
-                💾 Simpan ke Pool
-              </button>
-            </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);">
+          <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 10px 14px; border: 1px solid var(--border);">
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Status Akun Puter</div>
+            <div style="font-size: 14px; font-weight: 600; color: #fff; margin-top: 4px;" id="relay-account-name">Memeriksa status login...</div>
           </div>
-        </div>
-
-        <!-- Accounts Pool Table -->
-        <div style="overflow-x: auto;">
-          <table class="pool-table" id="table-puter-accounts">
-            <thead>
-              <tr>
-                <th style="width: 50px;">Prio</th>
-                <th>Username / ID</th>
-                <th>Status Pool</th>
-                <th>Terakhir Digunakan</th>
-                <th style="text-align: right;">Aksi Kontrol</th>
-              </tr>
-            </thead>
-            <tbody id="tbody-puter-accounts">
-              <tr>
-                <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 16px;">Memuat daftar akun Puter...</td>
-              </tr>
-            </tbody>
-          </table>
+          <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 10px 14px; border: 1px solid var(--border);">
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Request Terlayani</div>
+            <div style="font-size: 14px; font-weight: 600; color: var(--accent-cyan); margin-top: 4px;" id="relay-stats-count">0 Request</div>
+          </div>
+          <div style="background: rgba(0,0,0,0.25); border-radius: 6px; padding: 10px 14px; border: 1px solid var(--border);">
+            <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Metode Eksekusi</div>
+            <div style="font-size: 14px; font-weight: 600; color: #10b981; margin-top: 4px;">Puter.js Browser SDK (Free Tier)</div>
+          </div>
         </div>
       </div>
 
@@ -472,10 +451,11 @@
 
           <!-- Section C: Puter Dedicated -->
           <div style="font-family: var(--font-mono); font-size: 13px; background: var(--code-bg); padding: 16px; border-radius: 8px; border: 1px solid rgba(139, 92, 246, 0.35);">
-            <p style="color: var(--accent-purple); font-weight: 700; margin-bottom: 8px;">3. Puter AI Dedicated Gateway:</p>
+            <p style="color: var(--accent-purple); font-weight: 700; margin-bottom: 8px;">3. Puter AI Dedicated Gateway (Browser Relay Free Tier):</p>
             <p style="margin-bottom: 6px;">Base URL: <span style="color: #fff;" id="quick-puter-base-url">http://127.0.0.1:20144/v2/puter</span> <button type="button" class="copy-btn" id="btn-copy-puter-base-url" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
-            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;">sk-opencode-free (atau Bearer Puter Token Anda)</span></p>
+            <p style="margin-bottom: 6px;">API Key : <span style="color: #fff;">sk-opencode-free (Keyless - sembarang teks)</span></p>
             <p>Model ID: <span id="quick-puter-model-id" style="color: #c084fc; font-weight: 600;">claude-opus-5-5</span> <button type="button" class="copy-btn" id="btn-copy-quick-puter-model" style="padding: 1px 6px; font-size: 10px; margin-left: 6px;">📋 Copy</button></p>
+            <p style="margin-top: 6px; font-size: 11px; color: var(--text-muted);">Keterangan: Autentikasi Puter ditangani langsung oleh tab browser Puter.js (1.000 kredit gratis per bulan tanpa butuh API key atau langganan premium).</p>
           </div>
 
           <!-- Section D: Generic Multi-Provider -->

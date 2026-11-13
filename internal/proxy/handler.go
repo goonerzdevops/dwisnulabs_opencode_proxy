@@ -153,6 +153,25 @@ func (s *Server) forwardOpenCodeChat(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 
+	if resp.StatusCode == http.StatusTooManyRequests {
+		errBlob, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if !isOverload429(errBlob) && ConcealAllCallerTools(prepared) {
+			fp = s.fingerprintFor(r, body)
+			if cfg.LogRequests {
+				s.logger.Printf("[tool-conceal-retry] model=%s status=%d retrying with concealed caller tools session=%s",
+					prepared.Model, resp.StatusCode, fp.SessionID)
+			}
+			resp, err = s.upstream.Send(ctx, cfg, prepared, fp)
+			if err != nil {
+				writeError(w, http.StatusBadGateway, "upstream_unreachable", err.Error())
+				return
+			}
+		} else {
+			resp.Body = io.NopCloser(bytes.NewReader(errBlob))
+		}
+	}
+
 	if cfg.LogRequests {
 		s.logger.Printf("%s model=%s lane=%s stream=%t session=%s status=%d elapsed=%s",
 			r.RemoteAddr, prepared.Model, prepared.Lane, prepared.ClientStreams, fp.SessionID,
@@ -160,7 +179,15 @@ func (s *Server) forwardOpenCodeChat(w http.ResponseWriter, r *http.Request, bod
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		dump, _ := json.MarshalIndent(map[string]any{"raw": body, "prepared": prepared.Body}, "", "  ")
+		errBlob, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(errBlob))
+		dump, _ := json.MarshalIndent(map[string]any{
+			"status_code":   resp.StatusCode,
+			"upstream_body": string(errBlob),
+			"raw":           body,
+			"prepared":      prepared.Body,
+		}, "", "  ")
 		_ = os.WriteFile("logs/last_failed_request.json", dump, 0644)
 		s.forwardUpstreamError(w, resp)
 		return

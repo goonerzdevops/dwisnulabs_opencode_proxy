@@ -42,15 +42,15 @@ document.addEventListener('DOMContentLoaded', () => {
     kiloTestOutput: document.getElementById('kilo-test-output'),
     kiloTestStats: document.getElementById('kilo-test-stats'),
     
-    // Tab 3: Puter AI
-    poolAccountsCount: document.getElementById('pool-accounts-count'),
-    btnAddAccountPopup: document.getElementById('btn-add-account-popup'),
-    btnToggleManualForm: document.getElementById('btn-toggle-manual-form'),
-    formManualAccount: document.getElementById('form-manual-account'),
-    manualAccUsername: document.getElementById('manual-acc-username'),
-    manualAccToken: document.getElementById('manual-acc-token'),
-    btnSubmitManualAccount: document.getElementById('btn-submit-manual-account'),
-    tbodyPuterAccounts: document.getElementById('tbody-puter-accounts'),
+    // Tab 3: Puter AI (Browser Relay)
+    relayStatusDot: document.getElementById('relay-status-dot'),
+    relayStatusBadge: document.getElementById('relay-status-badge'),
+    relayStatusDesc: document.getElementById('relay-status-desc'),
+    relayAccountName: document.getElementById('relay-account-name'),
+    relayStatsCount: document.getElementById('relay-stats-count'),
+    btnPuterLogin: document.getElementById('btn-puter-login'),
+    btnPuterSwitch: document.getElementById('btn-puter-switch'),
+    btnPuterLogout: document.getElementById('btn-puter-logout'),
     btnSavePuterModel: document.getElementById('btn-save-puter-model'),
     puterModelSelect: document.getElementById('puter-model-select'),
     btnRefreshPuterModels: document.getElementById('btn-refresh-puter-models'),
@@ -97,256 +97,52 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Puter token eye toggle
-  if (elements.btnTogglePuterToken && elements.puterTokenInput) {
-    elements.btnTogglePuterToken.onclick = () => {
-      const isPwd = elements.puterTokenInput.type === 'password';
-      elements.puterTokenInput.type = isPwd ? 'text' : 'password';
-      elements.btnTogglePuterToken.textContent = isPwd ? '🙈' : '👁️';
-    };
-  }
-
-  // Puter.js Multi-Account Pool Management
-  let puterAccounts = [];
-
-  async function loadPuterAccounts() {
-    if (!elements.tbodyPuterAccounts) return;
-    try {
-      const res = await fetch('/api/puter/accounts');
-      if (!res.ok) return;
-      const data = await res.json();
-      puterAccounts = data.accounts || [];
-
-      if (elements.poolAccountsCount) {
-        elements.poolAccountsCount.textContent = `${puterAccounts.length} Akun`;
-      }
-
-      if (puterAccounts.length === 0) {
-        elements.tbodyPuterAccounts.innerHTML = `
-          <tr>
-            <td colspan="5" style="text-align: center; color: var(--text-muted); padding: 24px;">
-              Belum ada akun Puter di dalam pool. Klik <strong>🔑 Tambah Akun (Popup Login)</strong> untuk menambahkan akun dan memakai 1,000 kredit bulanan gratis!
-            </td>
-          </tr>
-        `;
+  // Puter.js Browser Relay Auth Controls
+  if (elements.btnPuterLogin) {
+    elements.btnPuterLogin.onclick = async () => {
+      if (!window.puter || !puter.auth) {
+        alert('Puter.js SDK belum siap dimuat di browser.');
         return;
       }
-
-      elements.tbodyPuterAccounts.innerHTML = '';
-      let foundPrimary = false;
-
-      puterAccounts.forEach((acc, idx) => {
-        const row = document.createElement('tr');
-        
-        let statusBadge = '';
-        const isCooldown = acc.status === 'cooldown';
-        const isRateLimited = acc.status === 'rate_limited';
-
-        if (acc.status === 'active') {
-          if (!foundPrimary) {
-            statusBadge = `<span class="badge-pool-primary">🟢 PRIMARY (In-Use)</span>`;
-            foundPrimary = true;
-          } else {
-            statusBadge = `<span class="badge-pool-standby">🛡️ STANDBY (Failover #${idx})</span>`;
-          }
-        } else if (isCooldown) {
-          statusBadge = `<span class="badge-pool-exhausted" title="${escapeHtml(acc.last_error || 'Kredit habis')}">🔴 KREDIT HABIS (Cooldown)</span>`;
-        } else if (isRateLimited) {
-          statusBadge = `<span class="badge-pool-ratelimit" title="${escapeHtml(acc.last_error || 'Rate limit')}">⏳ RATE LIMITED (60s)</span>`;
-        } else {
-          statusBadge = `<span class="badge-puter-status">${escapeHtml(acc.status)}</span>`;
-        }
-
-        const lastUsedStr = acc.last_used_at ? formatTime(acc.last_used_at) : '<span style="color: var(--text-muted);">-</span>';
-        
-        const setPrimaryBtn = (idx > 0 && acc.status === 'active')
-          ? `<button class="btn-action-small" onclick="window.setPuterPrimary('${escapeHtml(acc.id)}')">⭐ Set Primary</button>`
-          : '';
-
-        const resetBtn = (acc.status !== 'active')
-          ? `<button class="btn-action-small" onclick="window.resetPuterAccount('${escapeHtml(acc.id)}')">↻ Reset</button>`
-          : '';
-
-        row.innerHTML = `
-          <td style="font-weight: 700; color: var(--accent-purple);">#${acc.priority || (idx + 1)}</td>
-          <td>
-            <div style="font-weight: 600; color: #fff;">${escapeHtml(acc.username || 'Puter User')}</div>
-            <div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono);">${escapeHtml(acc.id)}</div>
-          </td>
-          <td>${statusBadge}</td>
-          <td style="font-size: 11px;">${lastUsedStr}</td>
-          <td style="text-align: right; display: flex; gap: 5px; justify-content: flex-end; align-items: center;">
-            ${setPrimaryBtn}
-            <button class="btn-action-small" onclick="window.pingPuterAccount('${escapeHtml(acc.id)}')">⚡ Ping</button>
-            ${resetBtn}
-            <button class="btn-action-small btn-action-danger" onclick="window.deletePuterAccount('${escapeHtml(acc.id)}', '${escapeHtml(acc.username)}')">🗑️</button>
-          </td>
-        `;
-        elements.tbodyPuterAccounts.appendChild(row);
-      });
-    } catch (e) {
-      console.warn('Failed to load puter accounts', e);
-    }
-  }
-
-  // Global window helpers for table action buttons
-  window.setPuterPrimary = async (id) => {
-    try {
-      const res = await fetch(`/api/puter/accounts/priority?id=${encodeURIComponent(id)}&priority=1`, { method: 'POST' });
-      if (res.ok) {
-        await loadPuterAccounts();
-      } else {
-        alert('Gagal mengubah prioritas akun: ' + res.statusText);
-      }
-    } catch (err) {
-      alert('Error: ' + err.message);
-    }
-  };
-
-  window.resetPuterAccount = async (id) => {
-    try {
-      const res = await fetch(`/api/puter/accounts/reset?id=${encodeURIComponent(id)}`, { method: 'POST' });
-      if (res.ok) {
-        await loadPuterAccounts();
-      } else {
-        alert('Gagal me-reset akun: ' + res.statusText);
-      }
-    } catch (err) {
-      alert('Error: ' + err.message);
-    }
-  };
-
-  window.deletePuterAccount = async (id, username) => {
-    if (!confirm(`Hapus akun '${username}' dari pool Puter?`)) return;
-    try {
-      const res = await fetch(`/api/puter/accounts?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (res.ok) {
-        await loadPuterAccounts();
-      } else {
-        alert('Gagal menghapus akun: ' + res.statusText);
-      }
-    } catch (err) {
-      alert('Error: ' + err.message);
-    }
-  };
-
-  window.pingPuterAccount = async (id) => {
-    try {
-      const model = elements.puterModelSelect ? elements.puterModelSelect.value : 'claude-3-5-haiku';
-      const apiKey = (elements.apiKeyInput && elements.apiKeyInput.value) ? elements.apiKeyInput.value : 'sk-opencode-free';
-      const res = await fetch('/api/puter/ping', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({ account_id: id, model })
-      });
-      const data = await res.json();
-      if (data.status === 'ok') {
-        alert(`✓ Akun Terhubung & Valid!\nModel: ${data.model}\nLatensi: ${data.latency_ms} ms`);
-      } else {
-        alert(`✗ Hasil Ping: ${data.message || 'Error'}`);
-      }
-      await loadPuterAccounts();
-    } catch (err) {
-      alert('Ping error: ' + err.message);
-    }
-  };
-
-  // Popup OAuth Add Account
-  if (elements.btnAddAccountPopup) {
-    elements.btnAddAccountPopup.onclick = async () => {
       try {
-        elements.btnAddAccountPopup.disabled = true;
-        elements.btnAddAccountPopup.textContent = 'Membuka popup login...';
-
-        if (window.puter && puter.auth) {
-          // Sign out first to allow logging in with another account
-          try { await puter.auth.signOut(); } catch (_) {}
-          
-          await puter.auth.signIn();
-          const user = await puter.auth.getUser();
-          const token = puter.authToken;
-
-          if (!token) {
-            alert('Tidak dapat mendeteksi auth token Puter setelah login.');
-            return;
-          }
-
-          const username = user?.username || user?.email || `user_${Date.now() % 10000}`;
-          const res = await fetch('/api/puter/accounts', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              username: username,
-              token: token,
-              status: 'active'
-            })
-          });
-
-          if (res.ok) {
-            await loadPuterAccounts();
-            alert(`✓ Berhasil menambahkan akun '${username}' ke pool Puter!`);
-          } else {
-            alert('Gagal menyimpan akun ke pool: ' + res.statusText);
-          }
-        } else {
-          alert('Puter.js SDK belum siap dimuat di browser.');
-        }
+        elements.btnPuterLogin.disabled = true;
+        elements.btnPuterLogin.textContent = 'Membuka popup login...';
+        await puter.auth.signIn();
+        await notifyBridgeStatus();
       } catch (err) {
-        console.warn('Popup login error or canceled', err);
+        console.warn('Puter login canceled or failed:', err);
       } finally {
-        elements.btnAddAccountPopup.disabled = false;
-        elements.btnAddAccountPopup.textContent = '🔑 Tambah Akun (Popup Login)';
+        elements.btnPuterLogin.disabled = false;
+        elements.btnPuterLogin.textContent = '🔑 Login ke Puter (Popup)';
       }
     };
   }
 
-  // Toggle Manual Account Form
-  if (elements.btnToggleManualForm && elements.formManualAccount) {
-    elements.btnToggleManualForm.onclick = () => {
-      const isHidden = elements.formManualAccount.style.display === 'none';
-      elements.formManualAccount.style.display = isHidden ? 'block' : 'none';
+  if (elements.btnPuterSwitch) {
+    elements.btnPuterSwitch.onclick = async () => {
+      if (!window.puter || !puter.auth) return;
+      try {
+        elements.btnPuterSwitch.disabled = true;
+        try { await puter.auth.signOut(); } catch (_) {}
+        await puter.auth.signIn();
+        await notifyBridgeStatus();
+      } catch (err) {
+        console.warn('Puter switch account failed:', err);
+      } finally {
+        elements.btnPuterSwitch.disabled = false;
+      }
     };
   }
 
-  // Submit Manual Account
-  if (elements.btnSubmitManualAccount) {
-    elements.btnSubmitManualAccount.onclick = async () => {
-      const username = elements.manualAccUsername ? elements.manualAccUsername.value.trim() : '';
-      const token = elements.manualAccToken ? elements.manualAccToken.value.trim() : '';
-      if (!token) {
-        alert('Auth token Puter tidak boleh kosong!');
-        return;
-      }
-      elements.btnSubmitManualAccount.disabled = true;
-      elements.btnSubmitManualAccount.textContent = 'Menyimpan...';
-
+  if (elements.btnPuterLogout) {
+    elements.btnPuterLogout.onclick = async () => {
+      if (!window.puter || !puter.auth) return;
+      if (!confirm('Yakin ingin logout dari akun Puter di browser ini?')) return;
       try {
-        const res = await fetch('/api/puter/accounts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: username || `acc_${Date.now() % 10000}`,
-            token: token,
-            status: 'active'
-          })
-        });
-        if (res.ok) {
-          if (elements.manualAccUsername) elements.manualAccUsername.value = '';
-          if (elements.manualAccToken) elements.manualAccToken.value = '';
-          elements.formManualAccount.style.display = 'none';
-          await loadPuterAccounts();
-          alert('✓ Akun manual berhasil ditambahkan ke pool!');
-        } else {
-          alert('Gagal menambahkan akun manual: ' + res.statusText);
-        }
+        await puter.auth.signOut();
+        await notifyBridgeStatus();
       } catch (err) {
-        alert('Error: ' + err.message);
-      } finally {
-        elements.btnSubmitManualAccount.disabled = false;
-        elements.btnSubmitManualAccount.textContent = '💾 Simpan ke Pool';
+        console.warn('Puter signOut failed:', err);
       }
     };
   }
@@ -642,12 +438,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const puterFeaturedModels = [
     'claude-opus-5-5',
     'claude-sonnet-5-5',
-    'claude-opus-5',
     'claude-haiku-5-5',
-    'claude-fable-5',
+    'deepseek-v4.1-flash-1017',
+    'deepseek-v4.1-flash',
+    'deepseek-v4-pro',
+    'gpt-5.4',
     'gpt-4o',
-    'gpt-4o-mini',
-    'deepseek-v4.1-flash'
+    'gemini-3.8-flash'
   ];
 
   let availablePuterModels = [];
@@ -679,15 +476,15 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Group models
     const claudeList = models.filter(m => m.toLowerCase().includes('claude'));
-    const gptList = models.filter(m => m.toLowerCase().includes('gpt'));
-    const deepseekList = models.filter(m => m.toLowerCase().includes('deepseek') || m.toLowerCase().includes('qwen'));
+    const gptList = models.filter(m => m.toLowerCase().includes('gpt') || m.toLowerCase().startsWith('o1') || m.toLowerCase().startsWith('o3'));
+    const deepseekList = models.filter(m => m.toLowerCase().includes('deepseek'));
     const otherList = models.filter(m => !claudeList.includes(m) && !gptList.includes(m) && !deepseekList.includes(m));
 
     const populate = (selectEl) => {
       selectEl.innerHTML = '';
       if (claudeList.length > 0) {
         const g = document.createElement('optgroup');
-        g.label = `🌟 Anthropic Claude Models (${claudeList.length})`;
+        g.label = `🌟 Anthropic Claude (${claudeList.length})`;
         claudeList.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m;
@@ -709,7 +506,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (deepseekList.length > 0) {
         const g = document.createElement('optgroup');
-        g.label = `⚡ DeepSeek & Open Models (${deepseekList.length})`;
+        g.label = `⚡ DeepSeek Models (${deepseekList.length})`;
         deepseekList.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m;
@@ -720,8 +517,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (otherList.length > 0) {
         const g = document.createElement('optgroup');
-        g.label = `🌐 All Other Puter Models (${otherList.length})`;
-        otherList.slice(0, 100).forEach(m => {
+        g.label = `🌐 Other Flagship Models (${otherList.length})`;
+        otherList.forEach(m => {
           const opt = document.createElement('option');
           opt.value = m;
           opt.textContent = m;
@@ -818,18 +615,6 @@ document.addEventListener('DOMContentLoaded', () => {
         renderKiloChips(kModel);
 
         // Puter configs
-        if (elements.puterTokenInput) {
-          elements.puterTokenInput.value = currentConfig.puter_api_key || '';
-        }
-        if (elements.puterStatusBadge) {
-          if (currentConfig.puter_api_key) {
-            elements.puterStatusBadge.className = 'badge-puter-status active';
-            elements.puterStatusBadge.textContent = 'Configured';
-          } else {
-            elements.puterStatusBadge.className = 'badge-puter-status';
-            elements.puterStatusBadge.textContent = 'Not Configured';
-          }
-        }
         const pModel = currentConfig.puter_default_model || 'claude-opus-5-5';
         if (elements.puterModelSelect) elements.puterModelSelect.value = pModel;
         if (elements.puterTestModelSelect) elements.puterTestModelSelect.value = pModel;
@@ -1052,9 +837,8 @@ document.addEventListener('DOMContentLoaded', () => {
       ...currentConfig, 
       default_model: selected,
       system_prompt_tuning: elements.promptTuningInput ? elements.promptTuningInput.value.trim() : '',
-      puter_api_key: elements.puterTokenInput ? elements.puterTokenInput.value.trim() : (currentConfig.puter_api_key || ''),
-      puter_default_model: elements.puterModelSelect ? elements.puterModelSelect.value : (currentConfig.puter_default_model || 'claude-3-5-sonnet'),
-      puter_enabled: elements.puterTokenInput ? !!elements.puterTokenInput.value.trim() : (currentConfig.puter_enabled || false)
+      puter_default_model: elements.puterModelSelect ? elements.puterModelSelect.value : (currentConfig.puter_default_model || 'claude-opus-5-5'),
+      puter_enabled: true
     };
 
     try {
@@ -1497,14 +1281,326 @@ document.addEventListener('DOMContentLoaded', () => {
     };
   }
 
+  // ==========================================
+  // Puter Browser Relay Bridge (SSE + HTTP)
+  // ==========================================
+  let bridgeEvtSource = null;
+  let bridgeReconnectTimer = null;
+  let bridgeServedCount = 0;
+
+  const relayDot = document.getElementById('relay-status-dot');
+  const relayBadge = document.getElementById('relay-status-badge');
+  const relayDesc = document.getElementById('relay-status-desc');
+  const relayAccount = document.getElementById('relay-account-name');
+  const relayCount = document.getElementById('relay-stats-count');
+  const btnLogin = document.getElementById('btn-puter-login');
+  const btnSwitch = document.getElementById('btn-puter-switch');
+  const btnLogout = document.getElementById('btn-puter-logout');
+
+  function updateBridgeUI(status, username) {
+    if (relayCount) {
+      relayCount.textContent = `${bridgeServedCount} Request`;
+    }
+
+    if (status === 'active') {
+      if (relayDot) {
+        relayDot.style.background = '#10b981';
+        relayDot.style.boxShadow = '0 0 10px #10b981';
+      }
+      if (relayBadge) {
+        relayBadge.className = 'badge-puter-status active';
+        relayBadge.textContent = 'Aktif & Siap Melayani';
+      }
+      if (relayDesc) {
+        relayDesc.innerHTML = 'Puter AI kini 100% menggunakan <strong>Browser Relay SDK (puter.js)</strong> langsung di browser Anda. Tab ini siap melayani request DeepSeek Harness / Cline via <strong>1,000 kredit gratis per bulan</strong>!';
+      }
+      if (relayAccount) {
+        relayAccount.textContent = username || 'Akun Terautentikasi';
+        relayAccount.style.color = '#34d399';
+      }
+      if (btnLogin) btnLogin.style.display = 'none';
+      if (btnSwitch) btnSwitch.style.display = 'inline-flex';
+      if (btnLogout) btnLogout.style.display = 'inline-flex';
+    } else if (status === 'warning') {
+      if (relayDot) {
+        relayDot.style.background = '#f59e0b';
+        relayDot.style.boxShadow = '0 0 10px #f59e0b';
+      }
+      if (relayBadge) {
+        relayBadge.className = 'badge-puter-status';
+        relayBadge.textContent = 'Perlu Login Puter';
+      }
+      if (relayDesc) {
+        relayDesc.textContent = 'Tab browser terhubung ke Go proxy, tetapi belum login ke Puter. Silakan klik "🔑 Login ke Puter (Popup)" untuk mengaktifkan 1,000 kredit gratis!';
+      }
+      if (relayAccount) {
+        relayAccount.textContent = 'Belum Login';
+        relayAccount.style.color = '#f59e0b';
+      }
+      if (btnLogin) btnLogin.style.display = 'inline-flex';
+      if (btnSwitch) btnSwitch.style.display = 'none';
+      if (btnLogout) btnLogout.style.display = 'none';
+    } else {
+      if (relayDot) {
+        relayDot.style.background = '#ef4444';
+        relayDot.style.boxShadow = '0 0 10px #ef4444';
+      }
+      if (relayBadge) {
+        relayBadge.className = 'badge-puter-status';
+        relayBadge.textContent = 'Terputus';
+      }
+      if (relayDesc) {
+        relayDesc.textContent = 'Koneksi ke Go Proxy terputus. Mencoba menghubungkan ulang...';
+      }
+      if (relayAccount) {
+        relayAccount.textContent = 'Tidak Terhubung';
+        relayAccount.style.color = '#ef4444';
+      }
+      if (btnLogin) btnLogin.style.display = 'inline-flex';
+      if (btnSwitch) btnSwitch.style.display = 'none';
+      if (btnLogout) btnLogout.style.display = 'none';
+    }
+  }
+
+  function normalizeMessagesForPuter(messages) {
+    if (typeof messages === 'string') return messages;
+    if (!Array.isArray(messages)) return String(messages);
+
+    return messages.map(m => {
+      let content = m.content;
+      if (Array.isArray(content)) {
+        content = content.map(part => part.text || part.image_url?.url || JSON.stringify(part)).join('\n');
+      }
+
+      const role = m.role || 'user';
+      let strContent = content != null ? String(content) : '';
+
+      // Multi-turn tool calling adaptation for Claude / Puter:
+      // 1. Tool execution result message: Claude doesn't accept role="tool"
+      if (role === 'tool') {
+        const toolLabel = m.name || m.tool_call_id || 'tool';
+        return {
+          role: 'user',
+          content: `[Tool Result: ${toolLabel}]:\n${strContent || '(no output)'}`
+        };
+      }
+
+      // 2. Assistant message with tool_calls: Claude requires non-empty content
+      if (role === 'assistant' && strContent.trim() === '' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        strContent = m.tool_calls.map(tc => {
+          const fnName = tc.function?.name || 'tool';
+          const fnArgs = tc.function?.arguments || '';
+          return `<invoke name="${fnName}">\n${fnArgs}\n</invoke>`;
+        }).join('\n');
+      }
+
+      // 3. Fallback: ensure content is never pure whitespace if assistant
+      if (role === 'assistant' && strContent.trim() === '') {
+        strContent = '(empty assistant response)';
+      }
+
+      return {
+        role: role,
+        content: strContent
+      };
+    });
+  }
+
+  async function notifyBridgeStatus() {
+    const isSignedIn = window.puter && puter.auth && puter.auth.isSignedIn();
+    let username = '';
+    if (isSignedIn) {
+      try {
+        const u = await puter.auth.getUser();
+        username = u?.username || u?.email || 'authenticated_user';
+      } catch (_) {}
+    }
+
+    try {
+      await fetch('/api/browser-relay/ready', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          signed_in: Boolean(isSignedIn),
+          username: username
+        })
+      });
+    } catch (_) {}
+
+    if (isSignedIn) {
+      updateBridgeUI('active', username);
+    } else {
+      updateBridgeUI('warning');
+    }
+  }
+
+  async function postBridgeChunk(id, text) {
+    try {
+      await fetch('/api/browser-relay/chunk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, text })
+      });
+    } catch (_) {}
+  }
+
+  async function postBridgeDone(id) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch('/api/browser-relay/done', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id })
+        });
+        if (res.ok) return;
+      } catch (e) {
+        console.warn(`[BrowserBridge] postBridgeDone retry ${attempt + 1}:`, e);
+      }
+      await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+    }
+  }
+
+  async function postBridgeError(id, error) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await fetch('/api/browser-relay/error', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, error: String(error) })
+        });
+        if (res.ok) return;
+      } catch (e) {
+        console.warn(`[BrowserBridge] postBridgeError retry ${attempt + 1}:`, e);
+      }
+      await new Promise(r => setTimeout(r, 150 * (attempt + 1)));
+    }
+  }
+
+  async function handleBridgeChatJob(job) {
+    const { id, model, messages, stream } = job;
+    try {
+      if (!window.puter || !puter.ai || !puter.auth || !puter.auth.isSignedIn()) {
+        await postBridgeError(id, 'Browser Relay: Tab browser belum login ke Puter. Buka tab Puter AI Hub dan klik login popup.');
+        return;
+      }
+
+      const puterInput = normalizeMessagesForPuter(messages);
+
+      // Enforce 100s timeout so background tabs or stale streams never hang indefinitely
+      const callTimeoutMs = 100000;
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error(`Puter AI execution timed out after ${callTimeoutMs / 1000}s`)), callTimeoutMs);
+      });
+
+      if (stream) {
+        try {
+          const streamResp = await Promise.race([
+            puter.ai.chat(puterInput, { model: model, stream: true }),
+            timeoutPromise
+          ]);
+          for await (const part of streamResp) {
+            const chunkText = part?.text || (typeof part === 'string' ? part : '');
+            if (chunkText) {
+              await postBridgeChunk(id, chunkText);
+            }
+          }
+          await postBridgeDone(id);
+        } catch (streamErr) {
+          console.warn('[BrowserBridge] Primary stream failed, attempting prompt fallback:', streamErr);
+          // Fallback: join to plain string prompt
+          const textPrompt = Array.isArray(messages)
+            ? messages.map(m => `${(m.role || 'user').toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`).join('\n\n')
+            : String(messages);
+          const streamResp2 = await Promise.race([
+            puter.ai.chat(textPrompt, { model: model, stream: true }),
+            timeoutPromise
+          ]);
+          for await (const part of streamResp2) {
+            const chunkText = part?.text || (typeof part === 'string' ? part : '');
+            if (chunkText) {
+              await postBridgeChunk(id, chunkText);
+            }
+          }
+          await postBridgeDone(id);
+        }
+      } else {
+        const directResp = await Promise.race([
+          puter.ai.chat(puterInput, { model: model }),
+          timeoutPromise
+        ]);
+        const text = typeof directResp === 'object' ? (directResp.message?.content || JSON.stringify(directResp)) : String(directResp);
+        await postBridgeChunk(id, text);
+        await postBridgeDone(id);
+      }
+
+      bridgeServedCount++;
+      notifyBridgeStatus();
+    } catch (err) {
+      console.error('[BrowserBridge] Chat job error:', err);
+      await postBridgeError(id, err.message || String(err));
+    }
+  }
+
+  function initBrowserBridge() {
+    function connect() {
+      if (bridgeEvtSource) {
+        try { bridgeEvtSource.close(); } catch (_) {}
+      }
+
+      bridgeEvtSource = new EventSource('/api/browser-relay/events');
+
+      bridgeEvtSource.onopen = () => {
+        console.log('[BrowserBridge] SSE connected to Go Proxy');
+        notifyBridgeStatus();
+      };
+
+      bridgeEvtSource.addEventListener('chat', async (evt) => {
+        try {
+          const job = JSON.parse(evt.data);
+          await handleBridgeChatJob(job);
+        } catch (err) {
+          console.error('[BrowserBridge] Error parsing chat job:', err);
+        }
+      });
+
+      bridgeEvtSource.onerror = () => {
+        updateBridgeUI('error', 'Terputus dari Proxy', 'Mencoba menghubungkan ulang ke Go proxy...');
+        try { bridgeEvtSource.close(); } catch (_) {}
+        scheduleReconnect();
+      };
+    }
+
+    function scheduleReconnect() {
+      if (bridgeReconnectTimer) return;
+      bridgeReconnectTimer = setTimeout(() => {
+        bridgeReconnectTimer = null;
+        connect();
+      }, 3000);
+    }
+
+    connect();
+
+    // Re-verify login status periodically & on tab focus
+    setInterval(() => {
+      notifyBridgeStatus();
+    }, 8000);
+
+    window.addEventListener('focus', () => notifyBridgeStatus());
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        notifyBridgeStatus();
+      }
+    });
+  }
+
   // Initial loads
+  initBrowserBridge();
   loadHealth();
   loadConfig();
   loadModels();
   loadKiloModels();
   loadPuterModels();
   loadTelemetry();
-  loadPuterAccounts();
 
   // Poll health and telemetry every 4s
   setInterval(() => {

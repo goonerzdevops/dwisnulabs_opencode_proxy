@@ -3,7 +3,6 @@ package proxy
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -24,6 +23,7 @@ type Server struct {
 	telemetry *TelemetryStore
 	puter     *PuterService
 	kilo      *KiloService
+	bridge    *BrowserBridge
 	logger    *log.Logger
 	startedAt time.Time
 	requests  atomic.Int64
@@ -52,6 +52,7 @@ func NewServer(manager *config.Manager, logger *log.Logger) *Server {
 		telemetry: telemetry,
 		puter:     NewPuterService(logger),
 		kilo:      NewKiloService(logger),
+		bridge:    NewBrowserBridge(logger),
 		logger:    logger,
 		startedAt: time.Now(),
 	}
@@ -68,22 +69,27 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v2/chat/completions", s.guard(s.handleV2ChatCompletions))
 	mux.HandleFunc("POST /v2/v1/chat/completions", s.guard(s.handleV2ChatCompletions))
 	mux.HandleFunc("GET /v2/models", s.guard(s.handleV2Models))
+	mux.HandleFunc("GET /v2/v1/models", s.guard(s.handleV2Models))
 
 	// Dedicated Puter endpoints
 	mux.HandleFunc("POST /v2/puter/chat/completions", s.guard(s.handlePuterChatCompletions))
 	mux.HandleFunc("POST /v2/puter/v1/chat/completions", s.guard(s.handlePuterChatCompletions))
 	mux.HandleFunc("GET /v2/puter/models", s.guard(s.handlePuterModels))
-	mux.HandleFunc("POST /api/puter/ping", s.guard(s.handlePuterPing))
-	mux.HandleFunc("GET /api/puter/accounts", s.guard(s.handlePuterAccountsGet))
-	mux.HandleFunc("POST /api/puter/accounts", s.guard(s.handlePuterAccountsPost))
-	mux.HandleFunc("DELETE /api/puter/accounts", s.guard(s.handlePuterAccountsDelete))
-	mux.HandleFunc("POST /api/puter/accounts/reset", s.guard(s.handlePuterAccountsReset))
-	mux.HandleFunc("POST /api/puter/accounts/priority", s.guard(s.handlePuterAccountsPriority))
+	mux.HandleFunc("GET /v2/puter/v1/models", s.guard(s.handlePuterModels))
 
 	// Dedicated Kilo endpoints
 	mux.HandleFunc("POST /v2/kilo/chat/completions", s.guard(s.handleKiloChatCompletions))
 	mux.HandleFunc("POST /v2/kilo/v1/chat/completions", s.guard(s.handleKiloChatCompletions))
 	mux.HandleFunc("GET /v2/kilo/models", s.guard(s.handleKiloModels))
+	mux.HandleFunc("GET /v2/kilo/v1/models", s.guard(s.handleKiloModels))
+
+	// Browser Relay Bridge endpoints
+	mux.HandleFunc("GET /api/browser-relay/events", s.bridge.HandleEvents)
+	mux.HandleFunc("POST /api/browser-relay/ready", s.bridge.HandleReady)
+	mux.HandleFunc("POST /api/browser-relay/chunk", s.bridge.HandleChunk)
+	mux.HandleFunc("POST /api/browser-relay/done", s.bridge.HandleDone)
+	mux.HandleFunc("POST /api/browser-relay/error", s.bridge.HandleError)
+	mux.HandleFunc("GET /api/browser-relay/status", s.bridge.HandleStatus)
 
 	mux.HandleFunc("GET /api/config", s.guard(s.handleConfigGet))
 	mux.HandleFunc("PUT /api/config", s.guard(s.handleConfigPut))
@@ -187,11 +193,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleV2Models(w http.ResponseWriter, r *http.Request) {
 	cfg := s.manager.Get()
 	force := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
-	opencodeModels := s.catalog.List(r.Context(), cfg, s.fingerprintFor(r, nil), force)
 
 	var puterModels []ModelEntry
 	if cfg.PuterEnabled {
-		puterModels = s.puter.FetchModels(r.Context(), cfg.PuterAPIKey, force)
+		puterModels = s.puter.FetchModels(r.Context(), force)
 	}
 
 	var kiloModels []ModelEntry
@@ -199,8 +204,8 @@ func (s *Server) handleV2Models(w http.ResponseWriter, r *http.Request) {
 		kiloModels = s.kilo.FetchModels(r.Context(), force)
 	}
 
-	combined := make([]ModelEntry, 0, len(opencodeModels)+len(puterModels)+len(kiloModels))
-	combined = append(combined, opencodeModels...)
+	// Exclude opencode models from /v2/models so client dropdowns are clean & curated.
+	combined := make([]ModelEntry, 0, len(puterModels)+len(kiloModels))
 	combined = append(combined, puterModels...)
 	combined = append(combined, kiloModels...)
 
@@ -223,157 +228,9 @@ func (s *Server) handleKiloChatCompletions(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) handlePuterModels(w http.ResponseWriter, r *http.Request) {
-	cfg := s.manager.Get()
 	force := r.URL.Query().Get("refresh") == "1" || r.URL.Query().Get("refresh") == "true"
-	puterModels := s.puter.FetchModels(r.Context(), cfg.PuterAPIKey, force)
+	puterModels := s.puter.FetchModels(r.Context(), force)
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": puterModels})
-}
-
-func (s *Server) handlePuterPing(w http.ResponseWriter, r *http.Request) {
-	cfg := s.manager.Get()
-	var payload struct {
-		Token     string `json:"token"`
-		Model     string `json:"model"`
-		AccountID string `json:"account_id"`
-	}
-	if r.Body != nil {
-		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<18)).Decode(&payload)
-	}
-
-	token := strings.TrimSpace(payload.Token)
-	if payload.AccountID != "" {
-		for _, acc := range s.manager.GetPuterAccounts() {
-			if acc.ID == payload.AccountID {
-				token = acc.Token
-				break
-			}
-		}
-	}
-	if token == "" {
-		token = strings.TrimSpace(cfg.PuterAPIKey)
-	}
-	if token == "" {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":  "error",
-			"message": "Token Puter masih kosong. Masukkan token terlebih dahulu.",
-		})
-		return
-	}
-
-	model := payload.Model
-	if model == "" {
-		model = cfg.PuterDefaultModel
-	}
-	if model == "" {
-		model = "claude-3-5-haiku"
-	}
-
-	latencyMs, actualModel, err := s.puter.PingToken(r.Context(), token, model)
-	if err != nil {
-		if payload.AccountID != "" && strings.Contains(err.Error(), "402") {
-			s.manager.MarkPuterAccountStatus(payload.AccountID, "cooldown", 24*time.Hour, err.Error())
-		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":     "error",
-			"message":    err.Error(),
-			"latency_ms": latencyMs,
-			"model":      actualModel,
-		})
-		return
-	}
-
-	if payload.AccountID != "" {
-		_ = s.manager.ResetPuterAccount(payload.AccountID)
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     "ok",
-		"message":    "Token Puter valid & terhubung!",
-		"latency_ms": latencyMs,
-		"model":      actualModel,
-	})
-}
-
-func (s *Server) handlePuterAccountsGet(w http.ResponseWriter, _ *http.Request) {
-	accounts := s.manager.GetPuterAccounts()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts": accounts,
-		"count":    len(accounts),
-	})
-}
-
-func (s *Server) handlePuterAccountsPost(w http.ResponseWriter, r *http.Request) {
-	var acc config.PuterAccount
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<18)).Decode(&acc); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_payload", err.Error())
-		return
-	}
-	if err := s.manager.AddOrUpdatePuterAccount(acc); err != nil {
-		writeError(w, http.StatusBadRequest, "account_save_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"message":  "Akun Puter berhasil disimpan ke pool",
-		"accounts": s.manager.GetPuterAccounts(),
-	})
-}
-
-func (s *Server) handlePuterAccountsDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "missing_id", "Parameter id diperlukan")
-		return
-	}
-	if err := s.manager.DeletePuterAccount(id); err != nil {
-		writeError(w, http.StatusInternalServerError, "account_delete_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"message":  "Akun berhasil dihapus dari pool",
-		"accounts": s.manager.GetPuterAccounts(),
-	})
-}
-
-func (s *Server) handlePuterAccountsReset(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	if id == "" {
-		writeError(w, http.StatusBadRequest, "missing_id", "Parameter id diperlukan")
-		return
-	}
-	if err := s.manager.ResetPuterAccount(id); err != nil {
-		writeError(w, http.StatusNotFound, "account_not_found", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"message":  "Status akun berhasil di-reset menjadi Aktif",
-		"accounts": s.manager.GetPuterAccounts(),
-	})
-}
-
-func (s *Server) handlePuterAccountsPriority(w http.ResponseWriter, r *http.Request) {
-	id := r.URL.Query().Get("id")
-	priorityStr := r.URL.Query().Get("priority")
-	if id == "" || priorityStr == "" {
-		writeError(w, http.StatusBadRequest, "missing_params", "Parameter id dan priority diperlukan")
-		return
-	}
-	var priority int
-	if _, err := fmt.Sscanf(priorityStr, "%d", &priority); err != nil || priority < 1 {
-		writeError(w, http.StatusBadRequest, "invalid_priority", "Priority harus berupa angka positif")
-		return
-	}
-	if err := s.manager.SetPuterAccountPriority(id, priority); err != nil {
-		writeError(w, http.StatusInternalServerError, "priority_failed", err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"status":   "ok",
-		"message":  "Prioritas akun berhasil diperbarui",
-		"accounts": s.manager.GetPuterAccounts(),
-	})
 }
 
 func (s *Server) handleConfigGet(w http.ResponseWriter, _ *http.Request) {

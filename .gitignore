@@ -27,6 +27,9 @@ doc/
 
 # Local config containing secrets (use config.example.json as template)
 config.json
+.env
+*token*.txt
+*.token
 
 # Editor and OS metadata
 .DS_Store
