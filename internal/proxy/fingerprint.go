@@ -344,7 +344,7 @@ func ConcealAllCallerTools(req *PreparedRequest) bool {
 		seq++
 		alias := pickUniqueAlias(fmt.Sprintf("fn_%d", seq), used)
 		delta[alias] = name
-		out = append(out, cloneToolWithName(tool, alias))
+		out = append(out, neutralizeToolDescription(cloneToolWithName(tool, alias), name))
 	}
 	if len(delta) == 0 {
 		return false
@@ -354,6 +354,22 @@ func ConcealAllCallerTools(req *PreparedRequest) bool {
 	aliasHistoryToolCalls(req.Body, delta)
 	req.Renames = composeRenames(req.Renames, delta)
 	return true
+}
+
+// neutralizeToolDescription replaces a caller tool's description (on an
+// already-cloned tool) with a short neutral one naming the original tool.
+// Upstream answers 429 FreeUsageLimitError for some third-party descriptions
+// even when the tool name is neutral (observed with DSH `skill`, `read`, `edit`,
+// e.g. "Edit an existing UTF-8 text file."); parameter schemas still pass.
+func neutralizeToolDescription(tool map[string]any, origName string) map[string]any {
+	holder := tool
+	if fn, ok := tool["function"].(map[string]any); ok {
+		holder = fn
+	}
+	if desc, _ := holder["description"].(string); strings.TrimSpace(desc) != "" {
+		holder["description"] = "Caller tool " + origName + "."
+	}
+	return tool
 }
 
 // appendMissingFingerprintTools adds any fingerprint definition the request is

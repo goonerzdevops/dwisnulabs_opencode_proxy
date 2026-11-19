@@ -154,12 +154,13 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 	}
 
 	var response *http.Response
+	forceDirect := false // set after a tool-conceal retry: stay on the primary egress
 	for attempt := 0; attempt <= len(delays); attempt++ {
 		var (
 			resp *http.Response
 			err  error
 		)
-		usingWarpDirect := u.warp != nil && u.warp.ShouldUseFallback(cfg, u.pool)
+		usingWarpDirect := !forceDirect && u.warp != nil && u.warp.ShouldUseFallback(cfg, u.pool)
 		if usingWarpDirect {
 			resp, err = u.warp.Send(ctx, cfg, reqFactoryWithFP, fp, u.sessionStore)
 		} else {
@@ -171,6 +172,10 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 		response = resp
 
 		if resp.StatusCode == http.StatusOK {
+			if forceDirect {
+				// The earlier 429 was caused by tool content, not egress quota.
+				u.pool.ClearCooldown()
+			}
 			return response, nil
 		}
 
@@ -197,6 +202,25 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 			}
 			response.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			return response, nil
+		}
+
+		// 1b. Upstream also answers 429 FreeUsageLimitError for some third-party tool
+		// descriptions. Conceal caller tools once on the same egress before burning
+		// the session or hopping to WARP (a hop cannot fix a content rejection).
+		if resp.StatusCode == http.StatusTooManyRequests && ConcealAllCallerTools(prepared) {
+			if newPayload, mErr := json.Marshal(prepared.Body); mErr == nil {
+				payload = newPayload
+				if fp.SessionID != "" {
+					InvalidateSession(fp.SessionID, u.sessionStore)
+				}
+				fp = Fingerprint{SessionID: GenerateSessionID(time.Now().UnixMilli()), Project: fp.Project}
+				if u.logger != nil {
+					u.logger.Printf("[tool-conceal] upstream 429 with caller tools; retrying once with concealed tools on same egress")
+				}
+				attempt--
+				forceDirect = true
+				continue
+			}
 		}
 
 		// 2. Spent/rejected session drop (HTTP 403 FreeTierError or quota 429 FreeUsageLimitError)
