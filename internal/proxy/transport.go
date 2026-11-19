@@ -23,14 +23,16 @@ import (
 
 // ProxyNode represents a single outbound egress route (direct or proxy).
 type ProxyNode struct {
-	URL           string    `json:"url"`
-	Healthy       bool      `json:"healthy"`
-	CooldownUntil time.Time `json:"cooldown_until"`
-	client        *http.Client
-	tlsClient     tls_client.HttpClient
-	sem           chan struct{}
-	lastReqMu     sync.Mutex
-	lastReqAt     time.Time
+	URL            string    `json:"url"`
+	Healthy        bool      `json:"healthy"`
+	CooldownUntil  time.Time `json:"cooldown_until"`
+	CooldownSource string    `json:"cooldown_source,omitempty"`
+	LastError      string    `json:"last_error,omitempty"`
+	client         *http.Client
+	tlsClient      tls_client.HttpClient
+	sem            chan struct{}
+	lastReqMu      sync.Mutex
+	lastReqAt      time.Time
 }
 
 type releaseBody struct {
@@ -355,13 +357,102 @@ func (p *ProxyPool) NextCandidate() (*ProxyNode, int) {
 
 // MarkCooldown puts a node into cooldown after a 429 or 403 rate-limit response.
 func (p *ProxyPool) MarkCooldown(idx int, duration time.Duration) {
+	p.MarkCooldownWithMeta(idx, duration, "", "")
+}
+
+// MarkCooldownWithMeta puts a node into cooldown with source and error metadata for UI observability.
+func (p *ProxyPool) MarkCooldownWithMeta(idx int, duration time.Duration, source, lastErr string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	if idx >= 0 && idx < len(p.nodes) {
 		p.nodes[idx].Healthy = false
 		p.nodes[idx].CooldownUntil = time.Now().Add(duration)
-		p.logger.Printf("proxy node [%s] entered cooldown for %s", p.nodes[idx].URL, duration)
+		p.nodes[idx].CooldownSource = source
+		p.nodes[idx].LastError = lastErr
+		p.logger.Printf("proxy node [%s] entered cooldown for %s (source=%s)", p.nodes[idx].URL, duration.Round(time.Second), source)
+	}
+}
+
+// ClearCooldown resets cooldown state on all nodes (e.g. when returning to direct manually).
+func (p *ProxyPool) ClearCooldown() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, n := range p.nodes {
+		n.Healthy = true
+		n.CooldownUntil = time.Time{}
+		n.CooldownSource = ""
+		n.LastError = ""
+	}
+}
+
+// IsPrimaryInCooldown reports whether all configured primary nodes (or the direct node) are currently cooling down.
+func (p *ProxyPool) IsPrimaryInCooldown() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if len(p.nodes) == 0 {
+		return false
+	}
+	now := time.Now()
+	for _, n := range p.nodes {
+		if now.After(n.CooldownUntil) {
+			return false
+		}
+	}
+	return true
+}
+
+// PrimaryDirectStatus returns the detailed health and exact reset countdown of the primary direct node.
+func (p *ProxyPool) PrimaryDirectStatus() map[string]any {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	now := time.Now()
+	if len(p.nodes) == 0 {
+		return map[string]any{
+			"status":           "healthy",
+			"healthy":          true,
+			"reset_at":         "",
+			"reset_in_seconds": 0,
+			"reset_source":     "",
+			"last_error":       "",
+		}
+	}
+
+	target := p.nodes[0]
+	for _, n := range p.nodes {
+		if strings.EqualFold(n.URL, "direct") {
+			target = n
+			break
+		}
+	}
+
+	healthy := now.After(target.CooldownUntil)
+	if healthy {
+		return map[string]any{
+			"url":              target.URL,
+			"status":           "healthy",
+			"healthy":          true,
+			"reset_at":         "",
+			"reset_in_seconds": 0,
+			"reset_source":     "",
+			"last_error":       "",
+		}
+	}
+
+	rem := int(target.CooldownUntil.Sub(now).Seconds())
+	if rem < 0 {
+		rem = 0
+	}
+	return map[string]any{
+		"url":              target.URL,
+		"status":           "cooldown",
+		"healthy":          false,
+		"reset_at":         target.CooldownUntil.Format(time.RFC3339),
+		"reset_in_seconds": rem,
+		"reset_source":     target.CooldownSource,
+		"last_error":       target.LastError,
 	}
 }
 
@@ -374,19 +465,46 @@ func (p *ProxyPool) Status() []map[string]any {
 	res := make([]map[string]any, 0, len(p.nodes))
 	for _, n := range p.nodes {
 		healthy := now.After(n.CooldownUntil)
+		statusStr := "active"
+		if !healthy {
+			statusStr = "cooldown"
+		}
 		item := map[string]any{
-			"url":     n.URL,
-			"healthy": healthy,
+			"url":                    n.URL,
+			"address":                n.URL,
+			"healthy":                healthy,
+			"status":                 statusStr,
+			"cooldown_remaining_sec": 0,
 		}
 		if !healthy {
-			item["cooldown_seconds_left"] = int(n.CooldownUntil.Sub(now).Seconds())
+			rem := int(n.CooldownUntil.Sub(now).Seconds())
+			if rem < 0 {
+				rem = 0
+			}
+			item["cooldown_seconds_left"] = rem
+			item["cooldown_remaining_sec"] = rem
+			item["cooldown_until"] = n.CooldownUntil.Format(time.RFC3339)
+			item["cooldown_source"] = n.CooldownSource
+			item["last_error"] = n.LastError
 		}
 		res = append(res, item)
 	}
 	return res
 }
 
-// DoWithFailover executes an HTTP request, automatically failing over to the next node if a 429 or 403 occurs.
+type multiReadCloser struct {
+	io.Reader
+	closer io.Closer
+}
+
+func (m *multiReadCloser) Close() error {
+	if m.closer != nil {
+		return m.closer.Close()
+	}
+	return nil
+}
+
+// DoWithFailover executes an HTTP request, automatically failing over to the next node if a non-overload 429 or 403 occurs.
 func (p *ProxyPool) DoWithFailover(
 	ctx context.Context,
 	cfg config.Config,
@@ -451,18 +569,29 @@ func (p *ProxyPool) DoWithFailover(
 			}
 		}
 
-		// If 429 (rate limited) or 403 FreeTierError, mark cooldown
+		// If 429 or 403, peek body to distinguish transient server overload from IP quota rate-limit.
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusForbidden {
-			p.MarkCooldown(idx, cooldown)
-			if totalNodes > 1 {
-				node.release(cfg)
-				if lastResp != nil {
-					io.Copy(io.Discard, io.LimitReader(lastResp.Body, 4096))
-					lastResp.Body.Close()
+			peekBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+			resp.Body = &multiReadCloser{
+				Reader: io.MultiReader(bytes.NewReader(peekBytes), resp.Body),
+				closer: resp.Body,
+			}
+
+			// Transient server overload 429 must NOT put the egress IP node into cooldown!
+			if resp.StatusCode != http.StatusTooManyRequests || !isOverload429(peekBytes) {
+				dur, src := ParseRetryAfter(resp.Header, cooldown)
+				errLabel := fmt.Sprintf("HTTP %d %s", resp.StatusCode, classifyRejectionReason(resp.StatusCode, peekBytes))
+				p.MarkCooldownWithMeta(idx, dur, src, errLabel)
+				if totalNodes > 1 {
+					node.release(cfg)
+					if lastResp != nil {
+						io.Copy(io.Discard, io.LimitReader(lastResp.Body, 4096))
+						lastResp.Body.Close()
+					}
+					lastResp = resp
+					p.logger.Printf("request via [%s] returned HTTP %d, failing over to next proxy node", node.URL, resp.StatusCode)
+					continue
 				}
-				lastResp = resp
-				p.logger.Printf("request via [%s] returned HTTP %d, failing over to next proxy node", node.URL, resp.StatusCode)
-				continue
 			}
 		}
 

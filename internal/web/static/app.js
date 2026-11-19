@@ -29,6 +29,28 @@ document.addEventListener('DOMContentLoaded', () => {
     promptTuningInput: document.getElementById('prompt-tuning-input'),
     proxyList: document.getElementById('proxy-list'),
 
+    // Tab 1: WARP IPv6 Fallback Hero Card
+    warpRoutePill: document.getElementById('warp-route-pill'),
+    warpToggleEnabled: document.getElementById('warp-toggle-enabled'),
+    warpDirectBadge: document.getElementById('warp-direct-badge'),
+    warpDirectResetLine: document.getElementById('warp-direct-reset-line'),
+    warpDirectCountdownLine: document.getElementById('warp-direct-countdown-line'),
+    warpStateBadge: document.getElementById('warp-state-badge'),
+    warpActiveIP: document.getElementById('warp-active-ip'),
+    btnCopyWarpIP: document.getElementById('btn-copy-warp-ip'),
+    warpMetaLine: document.getElementById('warp-meta-line'),
+    warpIdleLine: document.getElementById('warp-idle-line'),
+    btnWarpHop: document.getElementById('btn-warp-hop'),
+    btnWarpStop: document.getElementById('btn-warp-stop'),
+    btnWarpClearBurned: document.getElementById('btn-warp-clear-burned'),
+    warpBurnedCountBtn: document.getElementById('warp-burned-count-btn'),
+    warpBurnedCountSummary: document.getElementById('warp-burned-count-summary'),
+    warpBurnedTbody: document.getElementById('warp-burned-tbody'),
+    warpStat200: document.getElementById('warp-stat-200'),
+    warpStat429: document.getElementById('warp-stat-429'),
+    warpStat403: document.getElementById('warp-stat-403'),
+    warpStatHops: document.getElementById('warp-stat-hops'),
+
     // Tab 2: Kilo Gateway Hub
     kiloModelSelect: document.getElementById('kilo-model-select'),
     btnRefreshKiloModels: document.getElementById('btn-refresh-kilo-models'),
@@ -84,6 +106,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let currentConfig = null;
   let availableModels = [];
+  let lastWarpStatus = null;
+  let lastWarpFetchedAt = 0;
 
   // Tab switching
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -202,6 +226,204 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function formatLocalDateTime(iso) {
+    if (!iso) return '-';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return iso;
+      return new Intl.DateTimeFormat('id-ID', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).format(d);
+    } catch (_) {
+      return iso;
+    }
+  }
+
+  function formatCountdownID(seconds) {
+    const s = Math.max(0, Math.floor(seconds || 0));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}j ${m}m ${sec}d`;
+    if (m > 0) return `${m}m ${sec}d`;
+    return `${sec}d`;
+  }
+
+  function renderWarpStatus(data) {
+    if (!data || !elements.warpRoutePill) return;
+    lastWarpStatus = data;
+
+    const elapsedSec = lastWarpFetchedAt > 0 ? Math.floor((Date.now() - lastWarpFetchedAt) / 1000) : 0;
+    const enabled = Boolean(data.enabled);
+    const direct = data.direct || {};
+    const warp = data.warp || {};
+    const stats = data.stats || {};
+    const burned = Array.isArray(data.burned_active) ? data.burned_active : [];
+    const state = String(warp.state || (enabled ? 'DORMANT' : 'DISABLED')).toUpperCase();
+
+    if (elements.warpToggleEnabled && document.activeElement !== elements.warpToggleEnabled) {
+      elements.warpToggleEnabled.checked = enabled;
+    }
+
+    // 1. Active Route Pill
+    let pillClass = 'route-pill route-pill-direct';
+    let pillText = '🟢 ACTIVE: DIRECT (ISP)';
+    if (state === 'HOPPING' || state === 'STARTING') {
+      pillClass = 'route-pill route-pill-hopping';
+      pillText = '🟡 HOPPING IPv6...';
+    } else if (state === 'EXHAUSTED') {
+      pillClass = 'route-pill route-pill-exhausted';
+      pillText = '🔴 WARP EXHAUSTED';
+    } else if (data.active_route === 'warp_ipv6' || state === 'ACTIVE') {
+      pillClass = 'route-pill route-pill-warp';
+      pillText = '🔵 ACTIVE: WARP IPv6 FALLBACK';
+    }
+    elements.warpRoutePill.className = pillClass;
+    elements.warpRoutePill.textContent = pillText;
+
+    // 2. Primary Direct Panel (exact reset time + live countdown)
+    const directHealthy = direct.healthy !== false;
+    let directRem = Math.max(0, (direct.reset_in_seconds || 0) - elapsedSec);
+    if (direct.reset_at) {
+      const targetMs = Date.parse(direct.reset_at);
+      if (!isNaN(targetMs)) {
+        directRem = Math.max(0, Math.floor((targetMs - Date.now()) / 1000));
+      }
+    }
+    if (directHealthy || directRem <= 0) {
+      if (elements.warpDirectBadge) {
+        elements.warpDirectBadge.textContent = '✅ Healthy';
+        elements.warpDirectBadge.style.color = 'var(--accent-green)';
+      }
+      if (elements.warpDirectResetLine) {
+        elements.warpDirectResetLine.textContent = 'Jalur utama siap dipakai (tidak ada cooldown aktif).';
+      }
+      if (elements.warpDirectCountdownLine) {
+        const autoRet = currentConfig ? (currentConfig.warp_auto_return_direct !== false) : true;
+        elements.warpDirectCountdownLine.textContent = `Auto-kembali ke Direct saat reset: ${autoRet ? 'ON' : 'OFF'}`;
+      }
+    } else {
+      if (elements.warpDirectBadge) {
+        elements.warpDirectBadge.textContent = '⏳ Cooldown';
+        elements.warpDirectBadge.style.color = '#fbbf24';
+      }
+      if (elements.warpDirectResetLine) {
+        elements.warpDirectResetLine.innerHTML = `Reset pada: <strong style="color:#fbbf24;">${escapeHtml(formatLocalDateTime(direct.reset_at))}</strong>`;
+      }
+      if (elements.warpDirectCountdownLine) {
+        const src = direct.reset_source ? ` • sumber: ${direct.reset_source}` : '';
+        const errInfo = direct.last_error ? ` (${direct.last_error})` : '';
+        elements.warpDirectCountdownLine.textContent = `Tersisa: ${formatCountdownID(directRem)}${src}${errInfo}`;
+      }
+    }
+
+    // 3. WARP IPv6 Fallback Panel (state, active IPv6, /64, colo, endpoint, idle timer)
+    if (elements.warpStateBadge) {
+      elements.warpStateBadge.textContent = state;
+      if (state === 'ACTIVE') elements.warpStateBadge.style.color = 'var(--accent-cyan)';
+      else if (state === 'HOPPING' || state === 'STARTING') elements.warpStateBadge.style.color = '#fbbf24';
+      else if (state === 'EXHAUSTED') elements.warpStateBadge.style.color = 'var(--danger)';
+      else if (state === 'DORMANT') elements.warpStateBadge.style.color = 'var(--accent-green)';
+      else elements.warpStateBadge.style.color = 'var(--text-muted)';
+    }
+
+    const activeIP = warp.active_ip || '';
+    if (elements.warpActiveIP) {
+      if (activeIP) {
+        elements.warpActiveIP.textContent = activeIP;
+        elements.warpActiveIP.style.color = 'var(--accent-cyan)';
+      } else if (state === 'DISABLED') {
+        elements.warpActiveIP.textContent = '— (Nonaktif • 0 MB RAM)';
+        elements.warpActiveIP.style.color = 'var(--text-muted)';
+      } else {
+        elements.warpActiveIP.textContent = '— (Dormant Standby • 0 MB RAM)';
+        elements.warpActiveIP.style.color = 'var(--text-muted)';
+      }
+    }
+    if (elements.btnCopyWarpIP) {
+      elements.btnCopyWarpIP.style.display = activeIP ? 'inline-flex' : 'none';
+    }
+
+    if (elements.warpMetaLine) {
+      if (activeIP) {
+        const p64 = warp.active_prefix64 || '-';
+        const colo = warp.colo || '-';
+        const ep = warp.endpoint || '-';
+        const hs = warp.handshake_ms ? `${(warp.handshake_ms / 1000).toFixed(2)}s` : '-';
+        elements.warpMetaLine.textContent = `Prefix: ${p64} • Edge: ${colo} • EP: ${ep} • HS: ${hs}`;
+      } else if (warp.last_error) {
+        elements.warpMetaLine.textContent = `Last notice: ${warp.last_error}`;
+      } else {
+        const binTxt = warp.wireproxy_ready ? 'wireproxy ready' : 'auto-download on demand';
+        const devTxt = warp.device_registered ? 'device cached' : 'auto-register 1x';
+        elements.warpMetaLine.textContent = `Mode Lazy IPv6 • ${binTxt} • ${devTxt}`;
+      }
+    }
+
+    if (elements.warpIdleLine) {
+      const idleRem = Math.max(0, (warp.idle_shutdown_in_seconds || 0) - elapsedSec);
+      if (state === 'ACTIVE' && idleRem > 0) {
+        elements.warpIdleLine.style.display = 'block';
+        elements.warpIdleLine.textContent = `Auto-stop idle dalam: ${formatCountdownID(idleRem)} (port socks5 :${warp.local_socks_port || '-'})`;
+      } else {
+        elements.warpIdleLine.style.display = 'none';
+      }
+    }
+
+    // 4. Stats & Active Burned /64 Table
+    if (elements.warpStat200) elements.warpStat200.textContent = String(stats.total_ok_200 || 0);
+    if (elements.warpStat429) elements.warpStat429.textContent = String(stats.total_burned_429 || 0);
+    if (elements.warpStat403) elements.warpStat403.textContent = String(stats.total_forbidden_403 || 0);
+    if (elements.warpStatHops) elements.warpStatHops.textContent = String(stats.total_hops || 0);
+    if (elements.warpBurnedCountBtn) elements.warpBurnedCountBtn.textContent = String(burned.length);
+    if (elements.warpBurnedCountSummary) elements.warpBurnedCountSummary.textContent = String(burned.length);
+
+    if (elements.warpBurnedTbody) {
+      if (burned.length === 0) {
+        elements.warpBurnedTbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada prefix IPv6 yang sedang cooldown.</td></tr>';
+      } else {
+        elements.warpBurnedTbody.innerHTML = burned.map(b => {
+          let rem = Math.max(0, (b.expires_in_seconds || 0) - elapsedSec);
+          if (b.expires_at) {
+            const ms = Date.parse(b.expires_at);
+            if (!isNaN(ms)) rem = Math.max(0, Math.floor((ms - Date.now()) / 1000));
+          }
+          const stColor = b.http_status === 403 ? 'var(--danger)' : '#fbbf24';
+          return `
+            <tr>
+              <td style="color: var(--accent-cyan);">${escapeHtml(b.prefix_64 || b.ip)}</td>
+              <td>${escapeHtml(b.ip || '-')}</td>
+              <td style="color: ${stColor};">HTTP ${b.http_status || 429} (${escapeHtml(b.reason || 'limit')})</td>
+              <td>${escapeHtml(formatLocalDateTime(b.expires_at))}</td>
+              <td style="font-weight: 600;">${formatCountdownID(rem)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+    }
+  }
+
+  async function loadWarpStatus() {
+    try {
+      const apiKey = (elements.apiKeyInput && elements.apiKeyInput.value) ? elements.apiKeyInput.value : 'sk-opencode-free';
+      const res = await fetch('/api/warp/status', {
+        headers: { 'Authorization': `Bearer ${apiKey}` }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      lastWarpFetchedAt = Date.now();
+      renderWarpStatus(data);
+    } catch (e) {
+      console.warn('Failed to load WARP status', e);
+    }
+  }
+
   function escapeHtml(str) {
     if (!str) return '';
     return String(str)
@@ -225,16 +447,26 @@ document.addEventListener('DOMContentLoaded', () => {
         elements.proxyList.innerHTML = '';
         data.proxies.forEach(p => {
           const item = document.createElement('div');
-          item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; background: var(--code-bg); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 11px;';
-          const isUp = p.status === 'active';
-          const statusColor = isUp ? 'var(--accent-green)' : 'var(--danger)';
-          const label = p.address === 'direct' ? '🌐 Direct (Local Machine Egress)' : `🛡️ Proxy: ${p.address}`;
+          item.style.cssText = 'display: flex; justify-content: space-between; align-items: center; gap: 8px; background: var(--code-bg); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); font-family: var(--font-mono); font-size: 11px;';
+          const addr = p.address || p.url || 'direct';
+          const isUp = (p.healthy !== undefined) ? Boolean(p.healthy) : (p.status === 'active');
+          const statusColor = isUp ? 'var(--accent-green)' : '#fbbf24';
+          const label = addr === 'direct' ? '🌐 Direct (Local Machine Egress)' : `🛡️ Proxy: ${addr}`;
+          const rem = p.cooldown_seconds_left || p.cooldown_remaining_sec || 0;
+          const statusText = isUp
+            ? 'ACTIVE'
+            : `COOLDOWN (${formatCountdownID(rem)}${p.cooldown_until ? ` • reset ${formatLocalDateTime(p.cooldown_until)}` : ''})`;
           item.innerHTML = `
             <span style="color: ${isUp ? '#fff' : 'var(--text-muted)'};">${escapeHtml(label)}</span>
-            <span style="color: ${statusColor}; font-weight: 600;">${p.status.toUpperCase()}${p.cooldown_remaining_sec > 0 ? ` (${p.cooldown_remaining_sec}s cd)` : ''}</span>
+            <span style="color: ${statusColor}; font-weight: 600; text-align: right;">${escapeHtml(statusText)}</span>
           `;
           elements.proxyList.appendChild(item);
         });
+      }
+
+      if (data.warp) {
+        lastWarpFetchedAt = Date.now();
+        renderWarpStatus(data.warp);
       }
     } catch (e) {
       console.warn('Failed to load health', e);
@@ -1593,14 +1825,136 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // WARP IPv6 Fallback Controls (Tab 1)
+  if (elements.btnCopyWarpIP) {
+    elements.btnCopyWarpIP.onclick = () => {
+      const ip = lastWarpStatus && lastWarpStatus.warp ? lastWarpStatus.warp.active_ip : '';
+      if (ip) copyToClipboard(ip, elements.btnCopyWarpIP);
+    };
+  }
+
+  if (elements.warpToggleEnabled) {
+    elements.warpToggleEnabled.onchange = async () => {
+      if (!currentConfig) return;
+      const enabled = Boolean(elements.warpToggleEnabled.checked);
+      elements.warpToggleEnabled.disabled = true;
+      try {
+        const res = await fetch('/api/config', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...currentConfig, warp_fallback_enabled: enabled })
+        });
+        if (res.ok) {
+          const saved = await res.json();
+          currentConfig = saved.config;
+          await loadWarpStatus();
+        } else {
+          elements.warpToggleEnabled.checked = !enabled;
+          alert('Gagal mengubah status WARP Fallback: ' + res.statusText);
+        }
+      } catch (e) {
+        elements.warpToggleEnabled.checked = !enabled;
+        alert('Error updating WARP Fallback: ' + e.message);
+      } finally {
+        elements.warpToggleEnabled.disabled = false;
+      }
+    };
+  }
+
+  if (elements.btnWarpHop) {
+    elements.btnWarpHop.onclick = async () => {
+      const apiKey = (elements.apiKeyInput && elements.apiKeyInput.value) ? elements.apiKeyInput.value : 'sk-opencode-free';
+      elements.btnWarpHop.disabled = true;
+      const origText = elements.btnWarpHop.textContent;
+      elements.btnWarpHop.textContent = '⏳ Hopping IPv6...';
+      try {
+        const res = await fetch('/api/warp/hop', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Hop IPv6 gagal: ' + (data?.error?.message || res.statusText));
+        } else if (data.warp_status) {
+          lastWarpFetchedAt = Date.now();
+          renderWarpStatus(data.warp_status);
+        } else {
+          await loadWarpStatus();
+        }
+      } catch (e) {
+        alert('Error saat hop IPv6: ' + e.message);
+      } finally {
+        elements.btnWarpHop.disabled = false;
+        elements.btnWarpHop.textContent = origText;
+      }
+    };
+  }
+
+  if (elements.btnWarpStop) {
+    elements.btnWarpStop.onclick = async () => {
+      const apiKey = (elements.apiKeyInput && elements.apiKeyInput.value) ? elements.apiKeyInput.value : 'sk-opencode-free';
+      elements.btnWarpStop.disabled = true;
+      try {
+        const res = await fetch('/api/warp/stop', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        const data = await res.json();
+        if (res.ok && data.warp_status) {
+          lastWarpFetchedAt = Date.now();
+          renderWarpStatus(data.warp_status);
+        } else {
+          await loadWarpStatus();
+        }
+        await loadHealth();
+      } catch (e) {
+        alert('Error saat stop WARP: ' + e.message);
+      } finally {
+        elements.btnWarpStop.disabled = false;
+      }
+    };
+  }
+
+  if (elements.btnWarpClearBurned) {
+    elements.btnWarpClearBurned.onclick = async () => {
+      const apiKey = (elements.apiKeyInput && elements.apiKeyInput.value) ? elements.apiKeyInput.value : 'sk-opencode-free';
+      elements.btnWarpClearBurned.disabled = true;
+      try {
+        const res = await fetch('/api/warp/burned/clear', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}` }
+        });
+        const data = await res.json();
+        if (res.ok && data.warp_status) {
+          lastWarpFetchedAt = Date.now();
+          renderWarpStatus(data.warp_status);
+        } else {
+          await loadWarpStatus();
+        }
+      } catch (e) {
+        alert('Error saat clear burned list: ' + e.message);
+      } finally {
+        elements.btnWarpClearBurned.disabled = false;
+      }
+    };
+  }
+
   // Initial loads
   initBrowserBridge();
   loadHealth();
   loadConfig();
+  loadWarpStatus();
   loadModels();
   loadKiloModels();
   loadPuterModels();
   loadTelemetry();
+
+  // Smooth 1-second live countdown ticker for direct reset, WARP idle timer, and burned /64 list
+  setInterval(() => {
+    if (lastWarpStatus) {
+      renderWarpStatus(lastWarpStatus);
+    }
+  }, 1000);
 
   // Poll health and telemetry every 4s
   setInterval(() => {

@@ -691,6 +691,190 @@ select:focus, input[type="text"]:focus, textarea:focus {
   background: rgba(239, 68, 68, 0.2);
 }
 
+/* --- WARP IPv6 Fallback Hero Card (Tab OpenCode) --- */
+.warp-hero-card {
+  margin-bottom: 20px;
+  border-color: rgba(56, 189, 248, 0.3);
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(14, 116, 144, 0.08));
+}
+.warp-hero-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.warp-hero-title-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.warp-hero-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+.route-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  letter-spacing: 0.02em;
+}
+.route-pill-direct {
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.route-pill-warp {
+  background: rgba(56, 189, 248, 0.16);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+}
+.route-pill-hopping {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+}
+.route-pill-exhausted {
+  background: rgba(239, 68, 68, 0.18);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+}
+.warp-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 5px 11px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.warp-switch-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent-cyan);
+  cursor: pointer;
+}
+.warp-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+@media (max-width: 820px) {
+  .warp-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.warp-panel {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.warp-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.warp-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.warp-kv {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #e2e8f0;
+  word-break: break-all;
+}
+.warp-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+.warp-ip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--code-bg);
+  padding: 6px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.warp-action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.warp-action-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.warp-stats-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.warp-burned-details {
+  margin-top: 10px;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.warp-burned-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  user-select: none;
+}
+.warp-burned-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.warp-burned-table th,
+.warp-burned-table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.warp-burned-table th {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
 footer {
   margin-top: 36px;
   padding-top: 20px;

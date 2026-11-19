@@ -20,6 +20,7 @@ type Upstream struct {
 	pool         *ProxyPool
 	logger       *log.Logger
 	sessionStore *SessionStore
+	warp         *WarpFallbackManager
 }
 
 // NewUpstream builds an Upstream client backed by an outbound ProxyPool.
@@ -41,10 +42,30 @@ func (u *Upstream) SetSessionStore(store *SessionStore) {
 	u.sessionStore = store
 }
 
+// SetWarpManager attaches the lazy WARP IPv6 fallback manager.
+func (u *Upstream) SetWarpManager(warp *WarpFallbackManager) {
+	u.warp = warp
+}
+
+// Warp returns the attached WARP IPv6 fallback manager (or nil if unconfigured).
+func (u *Upstream) Warp() *WarpFallbackManager {
+	return u.warp
+}
+
+// Close releases background WARP tunnel processes if active.
+func (u *Upstream) Close() {
+	if u.warp != nil {
+		u.warp.Close()
+	}
+}
+
 // SyncConfig syncs the proxy pool with the new configuration.
 func (u *Upstream) SyncConfig(cfg config.Config) {
 	if u.pool != nil {
 		u.pool.Sync(cfg)
+	}
+	if u.warp != nil && !cfg.WarpFallbackEnabled {
+		u.warp.Stop("disabled_in_config")
 	}
 }
 
@@ -112,13 +133,16 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 	}
 
 	url := strings.TrimRight(cfg.UpstreamBaseURL, "/") + prepared.Path
-	reqFactory := func() (*http.Request, error) {
+	reqFactoryWithFP := func(curFP Fingerprint) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			return nil, err
 		}
-		u.applyHeaders(req.Header, true, fp)
+		u.applyHeaders(req.Header, true, curFP)
 		return req, nil
+	}
+	reqFactory := func() (*http.Request, error) {
+		return reqFactoryWithFP(fp)
 	}
 
 	delays := []time.Duration{
@@ -131,7 +155,16 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 
 	var response *http.Response
 	for attempt := 0; attempt <= len(delays); attempt++ {
-		resp, _, err := u.pool.DoWithFailover(ctx, cfg, reqFactory)
+		var (
+			resp *http.Response
+			err  error
+		)
+		usingWarpDirect := u.warp != nil && u.warp.ShouldUseFallback(cfg, u.pool)
+		if usingWarpDirect {
+			resp, err = u.warp.Send(ctx, cfg, reqFactoryWithFP, fp, u.sessionStore)
+		} else {
+			resp, _, err = u.pool.DoWithFailover(ctx, cfg, reqFactory)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("upstream request failed: %w", err)
 		}
@@ -172,6 +205,25 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 				InvalidateSession(fp.SessionID, u.sessionStore)
 				if u.logger != nil {
 					u.logger.Printf("[session-drop] upstream rejected session %s (HTTP %d), invalidated from cache for future requests", fp.SessionID, resp.StatusCode)
+				}
+			}
+
+			// 3. Lazy WARP IPv6 Fallback when primary egress hits quota limit
+			if !usingWarpDirect && cfg.WarpFallbackEnabled && u.warp != nil {
+				freshFP := Fingerprint{
+					SessionID: GenerateSessionID(time.Now().UnixMilli()),
+					Project:   fp.Project,
+				}
+				if u.logger != nil {
+					u.logger.Printf("[warp-fallback] primary egress hit HTTP %d; failing over transparently to WARP IPv6 (new session=%s)",
+						resp.StatusCode, freshFP.SessionID)
+				}
+				warpResp, warpErr := u.warp.Send(ctx, cfg, reqFactoryWithFP, freshFP, u.sessionStore)
+				if warpErr == nil && warpResp != nil {
+					return warpResp, nil
+				}
+				if u.logger != nil && warpErr != nil {
+					u.logger.Printf("[warp-fallback] fallback attempt failed: %v", warpErr)
 				}
 			}
 		}

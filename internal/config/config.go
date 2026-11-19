@@ -40,6 +40,24 @@ type Config struct {
 	PuterDefaultModel      string            `json:"puter_default_model"`
 	KiloEnabled            bool              `json:"kilo_enabled"`
 	KiloDefaultModel       string            `json:"kilo_default_model"`
+	WarpFallbackEnabled     bool              `json:"warp_fallback_enabled"`
+	WarpAutoDownload        bool              `json:"warp_auto_download"`
+	WarpWireproxyPath       string            `json:"warp_wireproxy_path"`
+	WarpEndpoints           []string          `json:"warp_endpoints"`
+	WarpMaxHops             int               `json:"warp_max_hops"`
+	WarpMaxTraceProbes      int               `json:"warp_max_trace_probes"`
+	WarpBurnHours           int               `json:"warp_burn_hours"`
+	WarpIdleShutdownMinutes int               `json:"warp_idle_shutdown_minutes"`
+	WarpAutoReturnDirect    bool              `json:"warp_auto_return_direct"`
+}
+
+// DefaultWarpEndpoints returns the empirically verified Cloudflare WARP WireGuard endpoints.
+func DefaultWarpEndpoints() []string {
+	return []string{
+		"162.159.192.1:2408",
+		"162.159.192.10:2408",
+		"162.159.195.1:2408",
+	}
 }
 
 // Default returns the out-of-the-box configuration described in plan.md.
@@ -66,6 +84,15 @@ func Default() Config {
 		PuterDefaultModel:      "claude-opus-5-5",
 		KiloEnabled:            true,
 		KiloDefaultModel:       "openrouter/free",
+		WarpFallbackEnabled:     false,
+		WarpAutoDownload:        true,
+		WarpWireproxyPath:       "",
+		WarpEndpoints:           DefaultWarpEndpoints(),
+		WarpMaxHops:             6,
+		WarpMaxTraceProbes:      4,
+		WarpBurnHours:           12,
+		WarpIdleShutdownMinutes: 30,
+		WarpAutoReturnDirect:    true,
 	}
 }
 
@@ -74,6 +101,7 @@ func (c Config) Clone() Config {
 	out := c
 	out.APIKeys = append([]string(nil), c.APIKeys...)
 	out.Proxies = append([]string(nil), c.Proxies...)
+	out.WarpEndpoints = append([]string(nil), c.WarpEndpoints...)
 	out.ModelAliases = make(map[string]string, len(c.ModelAliases))
 	for k, v := range c.ModelAliases {
 		out.ModelAliases[k] = v
@@ -142,6 +170,28 @@ func (c *Config) Normalize() {
 	}
 	if strings.TrimSpace(c.KiloDefaultModel) == "" {
 		c.KiloDefaultModel = def.KiloDefaultModel
+	}
+	var endpoints []string
+	for _, ep := range c.WarpEndpoints {
+		if ep = strings.TrimSpace(ep); ep != "" {
+			endpoints = append(endpoints, ep)
+		}
+	}
+	if len(endpoints) == 0 {
+		endpoints = def.WarpEndpoints
+	}
+	c.WarpEndpoints = endpoints
+	if c.WarpMaxHops <= 0 {
+		c.WarpMaxHops = def.WarpMaxHops
+	}
+	if c.WarpMaxTraceProbes <= 0 {
+		c.WarpMaxTraceProbes = def.WarpMaxTraceProbes
+	}
+	if c.WarpBurnHours <= 0 {
+		c.WarpBurnHours = def.WarpBurnHours
+	}
+	if c.WarpIdleShutdownMinutes <= 0 {
+		c.WarpIdleShutdownMinutes = def.WarpIdleShutdownMinutes
 	}
 }
 

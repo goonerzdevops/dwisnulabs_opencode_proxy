@@ -8,6 +8,7 @@ bin/
 
 # Runtime logs and telemetry
 logs/
+data/warp/
 *.log
 *.jsonl
 proxy_err.log
@@ -16,6 +17,7 @@ proxy_run.log
 # Temporary test and probe artifacts
 *.out
 *.test
+scratch/
 tests/logs/
 tests/scratch_kilo/
 tests/smoke/*.log

@@ -96,6 +96,80 @@
 
     <!-- TAB 1: OpenCode Gateway -->
     <div class="tab-pane active" id="tab-opencode">
+      <!-- Egress Routing & WARP IPv6 Fallback Hero Card -->
+      <div class="card warp-hero-card" id="warp-hero-card">
+        <div class="warp-hero-header">
+          <div class="warp-hero-title-group">
+            <span class="warp-hero-title">🛡️ Egress Routing &amp; WARP IPv6 Fallback</span>
+            <span class="route-pill route-pill-direct" id="warp-route-pill">🟢 ACTIVE: DIRECT (ISP)</span>
+          </div>
+          <label class="warp-switch-label" for="warp-toggle-enabled" title="Aktifkan fallback WARP IPv6 otomatis saat jalur utama direct kena HTTP 429">
+            <input type="checkbox" id="warp-toggle-enabled" role="switch">
+            <span>Enable WARP IPv6 Fallback</span>
+          </label>
+        </div>
+
+        <div class="warp-grid">
+          <!-- Primary Direct Panel -->
+          <div class="warp-panel">
+            <div class="warp-panel-head">
+              <span class="warp-panel-title">🌐 Primary Egress (DIRECT ISP)</span>
+              <span id="warp-direct-badge" style="font-size: 11px; font-weight: 700; color: var(--accent-green);">✅ Healthy</span>
+            </div>
+            <div class="warp-kv" id="warp-direct-reset-line">Jalur utama siap dipakai (tidak ada cooldown aktif).</div>
+            <div class="warp-sub" id="warp-direct-countdown-line">Auto-return ke Direct saat reset: ON</div>
+          </div>
+
+          <!-- WARP IPv6 Panel -->
+          <div class="warp-panel">
+            <div class="warp-panel-head">
+              <span class="warp-panel-title">🌀 Fallback Tunnel (WARP IPv6)</span>
+              <span id="warp-state-badge" style="font-size: 11px; font-weight: 700; color: var(--text-muted);">DISABLED</span>
+            </div>
+            <div class="warp-ip-row">
+              <span class="warp-kv" id="warp-active-ip" style="color: var(--accent-cyan);">— (Standby • 0 MB RAM)</span>
+              <button type="button" class="copy-btn" id="btn-copy-warp-ip" style="display: none;" title="Copy active WARP IPv6 address">📋 Copy</button>
+            </div>
+            <div class="warp-sub" id="warp-meta-line">Prefix /64: - &bull; Edge: - &bull; Endpoint: -</div>
+            <div class="warp-sub" id="warp-idle-line" style="display: none; color: #fbbf24;"></div>
+          </div>
+        </div>
+
+        <div class="warp-action-bar">
+          <div class="warp-action-btns">
+            <button type="button" class="copy-btn" id="btn-warp-hop" title="Uji atau rotasi manual ke prefix IPv6 /64 WARP baru">🔄 Hop IPv6 Baru</button>
+            <button type="button" class="copy-btn" id="btn-warp-stop" title="Matikan tunnel wireproxy dan reset cooldown direct">⏹ Stop WARP</button>
+            <button type="button" class="copy-btn" id="btn-warp-clear-burned" title="Bersihkan daftar prefix /64 yang sedang cooldown">🧹 Clear Burned (<span id="warp-burned-count-btn">0</span>)</button>
+          </div>
+          <div class="warp-stats-strip" id="warp-stats-strip">
+            <span>OK 200: <strong style="color: var(--accent-green);" id="warp-stat-200">0</strong></span>
+            <span>Limit 429: <strong style="color: #fbbf24;" id="warp-stat-429">0</strong></span>
+            <span>Forbidden 403: <strong style="color: var(--danger);" id="warp-stat-403">0</strong></span>
+            <span>Hops: <strong style="color: var(--accent-cyan);" id="warp-stat-hops">0</strong></span>
+          </div>
+        </div>
+
+        <details class="warp-burned-details" id="warp-burned-details">
+          <summary>📋 Active Burned IPv6 (/64) — <span id="warp-burned-count-summary">0</span> prefix sedang cooldown</summary>
+          <div style="overflow-x: auto;">
+            <table class="warp-burned-table">
+              <thead>
+                <tr>
+                  <th>Prefix /64</th>
+                  <th>IPv6 Egress</th>
+                  <th>Status / Alasan</th>
+                  <th>Reset Pada (Lokal)</th>
+                  <th>Sisa Waktu</th>
+                </tr>
+              </thead>
+              <tbody id="warp-burned-tbody">
+                <tr><td colspan="5" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada prefix IPv6 yang sedang cooldown.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+
       <div class="section-grid">
         <!-- Settings Panel -->
         <div class="card">

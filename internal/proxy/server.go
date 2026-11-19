@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"log"
@@ -36,12 +37,15 @@ func NewServer(manager *config.Manager, logger *log.Logger) *Server {
 	}
 	sessions := NewSessionStore(time.Duration(manager.Get().SessionTTLMinutes)*time.Minute, 1000)
 	upstream := NewUpstream(manager.Get(), logger, sessions)
+	baseDir := filepath.Dir(manager.Path())
+	warpMgr := NewWarpFallbackManager(baseDir, logger)
+	upstream.SetWarpManager(warpMgr)
 	manager.Configure(func(cfg config.Config) {
 		sessions.SetTTL(time.Duration(cfg.SessionTTLMinutes) * time.Minute)
 		upstream.SyncConfig(cfg)
 	})
 
-	walPath := filepath.Join(filepath.Dir(manager.Path()), "logs", "usage.jsonl")
+	walPath := filepath.Join(baseDir, "logs", "usage.jsonl")
 	telemetry := NewTelemetryStore(200, walPath)
 
 	return &Server{
@@ -96,6 +100,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/telemetry", s.guard(s.handleTelemetryGet))
 	mux.HandleFunc("POST /api/telemetry/clear", s.guard(s.handleTelemetryClear))
 	mux.HandleFunc("DELETE /api/telemetry", s.guard(s.handleTelemetryClear))
+	mux.HandleFunc("GET /api/warp/status", s.guard(s.handleWarpStatus))
+	mux.HandleFunc("POST /api/warp/hop", s.guard(s.handleWarpHop))
+	mux.HandleFunc("POST /api/warp/stop", s.guard(s.handleWarpStop))
+	mux.HandleFunc("POST /api/warp/burned/clear", s.guard(s.handleWarpBurnedClear))
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	mux.Handle("GET /", web.Handler())
@@ -155,6 +163,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"total_cached_tokens": s.telemetry.TotalCachedTokens(),
 		"total_output_tokens": s.telemetry.TotalOutputTokens(),
 		"cache_hit_pct":       s.telemetry.OverallCacheHitPct(),
+	}
+	if wm := s.upstream.Warp(); wm != nil {
+		body["warp"] = wm.Status(cfg, s.upstream.Pool())
 	}
 	writeJSON(w, http.StatusOK, body)
 }
@@ -258,8 +269,78 @@ func (s *Server) handleConfigPut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"status": "updated", "config": s.manager.Get()})
 }
 
-// Close gracefully releases background workers such as telemetry WAL writer.
+func (s *Server) handleWarpStatus(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.manager.Get()
+	wm := s.upstream.Warp()
+	if wm == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "active_route": "direct"})
+		return
+	}
+	writeJSON(w, http.StatusOK, wm.Status(cfg, s.upstream.Pool()))
+}
+
+func (s *Server) handleWarpHop(w http.ResponseWriter, r *http.Request) {
+	cfg := s.manager.Get()
+	wm := s.upstream.Warp()
+	if wm == nil {
+		writeError(w, http.StatusServiceUnavailable, "warp_unavailable", "WARP fallback manager is not initialized")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	trace, err := wm.ManualHop(ctx, cfg)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "warp_hop_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "hopped",
+		"trace":       trace,
+		"warp_status": wm.Status(cfg, s.upstream.Pool()),
+	})
+}
+
+func (s *Server) handleWarpStop(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.manager.Get()
+	if wm := s.upstream.Warp(); wm != nil {
+		wm.Stop("manual_stop")
+	}
+	if pool := s.upstream.Pool(); pool != nil {
+		pool.ClearCooldown()
+	}
+	var st map[string]any
+	if wm := s.upstream.Warp(); wm != nil {
+		st = wm.Status(cfg, s.upstream.Pool())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "stopped",
+		"message":     "WARP tunnel stopped and primary direct egress cooldown cleared.",
+		"warp_status": st,
+	})
+}
+
+func (s *Server) handleWarpBurnedClear(w http.ResponseWriter, _ *http.Request) {
+	cfg := s.manager.Get()
+	if wm := s.upstream.Warp(); wm != nil {
+		wm.Store().ClearBurned()
+	}
+	var st map[string]any
+	if wm := s.upstream.Warp(); wm != nil {
+		st = wm.Status(cfg, s.upstream.Pool())
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "cleared",
+		"message":     "Active WARP burned /64 list cleared.",
+		"warp_status": st,
+	})
+}
+
+// Close gracefully releases background workers such as telemetry WAL writer and WARP wireproxy.
 func (s *Server) Close() {
+	if s.upstream != nil {
+		s.upstream.Close()
+	}
 	if s.telemetry != nil {
 		s.telemetry.Close()
 	}
