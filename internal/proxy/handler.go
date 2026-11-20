@@ -153,25 +153,6 @@ func (s *Server) forwardOpenCodeChat(w http.ResponseWriter, r *http.Request, bod
 		return
 	}
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		errBlob, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		_ = resp.Body.Close()
-		if !isOverload429(errBlob) && ConcealAllCallerTools(prepared) {
-			fp = s.fingerprintFor(r, body)
-			if cfg.LogRequests {
-				s.logger.Printf("[tool-conceal-retry] model=%s status=%d retrying with concealed caller tools session=%s",
-					prepared.Model, resp.StatusCode, fp.SessionID)
-			}
-			resp, err = s.upstream.Send(ctx, cfg, prepared, fp)
-			if err != nil {
-				writeError(w, http.StatusBadGateway, "upstream_unreachable", err.Error())
-				return
-			}
-		} else {
-			resp.Body = io.NopCloser(bytes.NewReader(errBlob))
-		}
-	}
-
 	if cfg.LogRequests {
 		s.logger.Printf("%s model=%s lane=%s stream=%t session=%s status=%d elapsed=%s",
 			r.RemoteAddr, prepared.Model, prepared.Lane, prepared.ClientStreams, fp.SessionID,

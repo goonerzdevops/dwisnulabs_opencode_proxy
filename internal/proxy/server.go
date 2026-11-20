@@ -39,6 +39,8 @@ func NewServer(manager *config.Manager, logger *log.Logger) *Server {
 	upstream := NewUpstream(manager.Get(), logger, sessions)
 	baseDir := filepath.Dir(manager.Path())
 	warpMgr := NewWarpFallbackManager(baseDir, logger)
+	warpMgr.SetWarmStandby(true)
+	warpMgr.SyncConfig(manager.Get())
 	upstream.SetWarpManager(warpMgr)
 	manager.Configure(func(cfg config.Config) {
 		sessions.SetTTL(time.Duration(cfg.SessionTTLMinutes) * time.Minute)

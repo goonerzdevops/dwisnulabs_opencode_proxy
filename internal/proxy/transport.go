@@ -510,6 +510,19 @@ func (p *ProxyPool) DoWithFailover(
 	cfg config.Config,
 	reqFactory func() (*http.Request, error),
 ) (*http.Response, string, error) {
+	return p.DoWithFailoverMode(ctx, cfg, reqFactory, false)
+}
+
+// DoWithFailoverMode executes an HTTP request with optional deferred 429 cooldown.
+// When skipCooldownOn429 is true (e.g. a request still carries unconcealed third-party
+// tool definitions that may trigger content-based 429), primary nodes are not marked
+// in long cooldown until the caller confirms the 429 persists after concealing tools.
+func (p *ProxyPool) DoWithFailoverMode(
+	ctx context.Context,
+	cfg config.Config,
+	reqFactory func() (*http.Request, error),
+	skipCooldownOn429 bool,
+) (*http.Response, string, error) {
 	p.mu.RLock()
 	totalNodes := len(p.nodes)
 	p.mu.RUnlock()
@@ -577,8 +590,10 @@ func (p *ProxyPool) DoWithFailover(
 				closer: resp.Body,
 			}
 
-			// Transient server overload 429 must NOT put the egress IP node into cooldown!
-			if resp.StatusCode != http.StatusTooManyRequests || !isOverload429(peekBytes) {
+			// Transient server overload 429 (or deferred content-429 probe) must NOT put the egress IP node into cooldown!
+			shouldCooldown := resp.StatusCode == http.StatusForbidden ||
+				(resp.StatusCode == http.StatusTooManyRequests && !isOverload429(peekBytes) && !skipCooldownOn429)
+			if shouldCooldown {
 				dur, src := ParseRetryAfter(resp.Header, cooldown)
 				errLabel := fmt.Sprintf("HTTP %d %s", resp.StatusCode, classifyRejectionReason(resp.StatusCode, peekBytes))
 				p.MarkCooldownWithMeta(idx, dur, src, errLabel)

@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tls_client "github.com/bogdanfinn/tls-client"
@@ -39,21 +40,77 @@ type WarpTraceInfo struct {
 }
 
 // WarpTunnelInstance encapsulates one running wireproxy child process and its HTTP/TLS clients.
+// It tracks active in-flight streams so retiring a tunnel waits for live responses to finish
+// cleanly instead of cutting SSE streams mid-flight.
 type WarpTunnelInstance struct {
 	Generation  uint64
 	Trace       WarpTraceInfo
 	ConnectedAt time.Time
 	tlsClient   tls_client.HttpClient
 	stdClient   *http.Client
+	inFlight    atomic.Int32
+	retiring    atomic.Bool
 	stopOnce    sync.Once
 	stopFn      func()
 }
 
-// Stop terminates the underlying wireproxy child process and removes its temporary config file.
+// Acquire claims an in-flight slot on this tunnel. Returns false if the tunnel is retiring.
+func (t *WarpTunnelInstance) Acquire() bool {
+	if t == nil || t.retiring.Load() {
+		return false
+	}
+	t.inFlight.Add(1)
+	if t.retiring.Load() {
+		t.Release()
+		return false
+	}
+	return true
+}
+
+// Release frees an in-flight slot and stops the tunnel immediately if it is retiring and drained.
+func (t *WarpTunnelInstance) Release() {
+	if t == nil {
+		return
+	}
+	rem := t.inFlight.Add(-1)
+	if rem <= 0 && t.retiring.Load() {
+		t.Stop()
+	}
+}
+
+// InFlight returns the number of active requests currently streaming through this tunnel.
+func (t *WarpTunnelInstance) InFlight() int32 {
+	if t == nil {
+		return 0
+	}
+	return t.inFlight.Load()
+}
+
+// Retire marks this tunnel as replaced so new requests will not enter it, and stops the
+// underlying wireproxy process as soon as in-flight streams drain (with a 45s hard cap).
+func (t *WarpTunnelInstance) Retire() {
+	if t == nil {
+		return
+	}
+	t.retiring.Store(true)
+	if t.inFlight.Load() <= 0 {
+		t.Stop()
+		return
+	}
+	go func() {
+		timer := time.NewTimer(45 * time.Second)
+		defer timer.Stop()
+		<-timer.C
+		t.Stop()
+	}()
+}
+
+// Stop immediately terminates the underlying wireproxy child process and removes its temporary config file.
 func (t *WarpTunnelInstance) Stop() {
 	if t == nil {
 		return
 	}
+	t.retiring.Store(true)
 	t.stopOnce.Do(func() {
 		if t.stopFn != nil {
 			t.stopFn()
@@ -159,20 +216,20 @@ BindAddress = 127.0.0.1:%d
 	}
 
 	socksAddr := fmt.Sprintf("127.0.0.1:%d", port)
-	if !waitForLocalPort(ctx, socksAddr, 3500*time.Millisecond) {
+	if !waitForLocalPort(ctx, socksAddr, 3000*time.Millisecond) {
 		cleanup()
 		return nil, fmt.Errorf("wireproxy socks port %s did not open in time", socksAddr)
 	}
 
-	// Brief settle window for WireGuard handshake initiation
+	// Short settle window followed by adaptive trace probing (avoids fixed 900ms blind sleep).
 	select {
-	case <-time.After(900 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 	case <-ctx.Done():
 		cleanup()
 		return nil, ctx.Err()
 	}
 
-	trace, err := probeWarpTrace(ctx, socksAddr, 4*time.Second)
+	trace, err := probeWarpTraceWithRetry(ctx, socksAddr, 3500*time.Millisecond)
 	if err != nil {
 		cleanup()
 		return nil, fmt.Errorf("trace via %s (%s): %w", socksAddr, endpoint, err)
@@ -200,17 +257,48 @@ BindAddress = 127.0.0.1:%d
 	}, nil
 }
 
+var (
+	portAllocMu sync.Mutex
+	recentPorts = map[int]time.Time{}
+)
+
 func allocateFreeLocalPort() (int, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return 0, err
+	portAllocMu.Lock()
+	defer portAllocMu.Unlock()
+
+	now := time.Now()
+	for p, exp := range recentPorts {
+		if now.After(exp) {
+			delete(recentPorts, p)
+		}
 	}
-	defer ln.Close()
-	addr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok || addr.Port <= 0 {
-		return 0, fmt.Errorf("unexpected tcp addr")
+
+	var kept []net.Listener
+	defer func() {
+		for _, ln := range kept {
+			_ = ln.Close()
+		}
+	}()
+
+	for attempt := 0; attempt < 16; attempt++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return 0, err
+		}
+		addr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok || addr.Port <= 0 {
+			_ = ln.Close()
+			return 0, fmt.Errorf("unexpected tcp addr")
+		}
+		if exp, used := recentPorts[addr.Port]; used && now.Before(exp) {
+			kept = append(kept, ln)
+			continue
+		}
+		recentPorts[addr.Port] = now.Add(5 * time.Second)
+		_ = ln.Close()
+		return addr.Port, nil
 	}
-	return addr.Port, nil
+	return 0, fmt.Errorf("unable to allocate unique ephemeral port")
 }
 
 func waitForLocalPort(ctx context.Context, addr string, timeout time.Duration) bool {
@@ -221,14 +309,52 @@ func waitForLocalPort(ctx context.Context, addr string, timeout time.Duration) b
 			return false
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		conn, err := net.DialTimeout("tcp", addr, 150*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
 			return true
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-time.After(40 * time.Millisecond):
+		case <-ctx.Done():
+			return false
+		}
 	}
 	return false
+}
+
+func probeWarpTraceWithRetry(ctx context.Context, socksAddr string, totalBudget time.Duration) (WarpTraceInfo, error) {
+	deadline := time.Now().Add(totalBudget)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		rem := time.Until(deadline)
+		if rem <= 200*time.Millisecond {
+			break
+		}
+		perAttempt := 1600 * time.Millisecond
+		if rem < perAttempt {
+			perAttempt = rem
+		}
+		info, err := probeWarpTrace(ctx, socksAddr, perAttempt)
+		if err == nil && info.IP != "" {
+			return info, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return WarpTraceInfo{}, ctx.Err()
+		}
+		if attempt < 2 && time.Until(deadline) > 300*time.Millisecond {
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-ctx.Done():
+				return WarpTraceInfo{}, ctx.Err()
+			}
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("trace deadline exceeded")
+	}
+	return WarpTraceInfo{}, lastErr
 }
 
 func probeWarpTrace(ctx context.Context, socksAddr string, timeout time.Duration) (WarpTraceInfo, error) {

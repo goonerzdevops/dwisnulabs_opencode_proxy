@@ -131,6 +131,7 @@
               <button type="button" class="copy-btn" id="btn-copy-warp-ip" style="display: none;" title="Copy active WARP IPv6 address">📋 Copy</button>
             </div>
             <div class="warp-sub" id="warp-meta-line">Prefix /64: - &bull; Edge: - &bull; Endpoint: -</div>
+            <div class="warp-sub" id="warp-standby-line" style="display: none; color: var(--accent-green);"></div>
             <div class="warp-sub" id="warp-idle-line" style="display: none; color: #fbbf24;"></div>
           </div>
         </div>
@@ -142,15 +143,38 @@
             <button type="button" class="copy-btn" id="btn-warp-clear-burned" title="Bersihkan daftar prefix /64 yang sedang cooldown">🧹 Clear Burned (<span id="warp-burned-count-btn">0</span>)</button>
           </div>
           <div class="warp-stats-strip" id="warp-stats-strip">
-            <span>OK 200: <strong style="color: var(--accent-green);" id="warp-stat-200">0</strong></span>
+            <span>OK 200: <strong style="color: var(--accent-green);" id="warp-stat-200">0</strong> <span id="warp-stat-ok-ips" style="opacity:0.75;">(0 IP)</span></span>
+            <span>Standby Swaps: <strong style="color: #38bdf8;" id="warp-stat-swaps">0</strong></span>
             <span>Limit 429: <strong style="color: #fbbf24;" id="warp-stat-429">0</strong></span>
-            <span>Forbidden 403: <strong style="color: var(--danger);" id="warp-stat-403">0</strong></span>
+            <span>403: <strong style="color: var(--danger);" id="warp-stat-403">0</strong></span>
             <span>Hops: <strong style="color: var(--accent-cyan);" id="warp-stat-hops">0</strong></span>
           </div>
         </div>
 
+        <details class="warp-burned-details warp-healthy-details" id="warp-healthy-details" open>
+          <summary>✅ Verified Healthy IPv6 (HTTP 200) — <span id="warp-healthy-clean-summary">0</span> bersih / <span id="warp-healthy-total-summary">0</span> total IPv6</summary>
+          <div style="overflow-x: auto;">
+            <table class="warp-burned-table">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Prefix /64</th>
+                  <th>IPv6 Egress</th>
+                  <th>OK 200</th>
+                  <th>Avg Latency</th>
+                  <th>Edge / Endpoint</th>
+                  <th>Terakhir Sukses</th>
+                </tr>
+              </thead>
+              <tbody id="warp-healthy-tbody">
+                <tr><td colspan="7" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada IPv6 WARP yang tercatat sukses HTTP 200.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+
         <details class="warp-burned-details" id="warp-burned-details">
-          <summary>📋 Active Burned IPv6 (/64) — <span id="warp-burned-count-summary">0</span> prefix sedang cooldown</summary>
+          <summary>🔥 Active Burned IPv6 (/64) — <span id="warp-burned-count-summary">0</span> prefix sedang cooldown</summary>
           <div style="overflow-x: auto;">
             <table class="warp-burned-table">
               <thead>
@@ -164,6 +188,27 @@
               </thead>
               <tbody id="warp-burned-tbody">
                 <tr><td colspan="5" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada prefix IPv6 yang sedang cooldown.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <details class="warp-burned-details warp-events-details" id="warp-events-details">
+          <summary>🧭 Live Transition &amp; Hop Timeline — <span id="warp-events-count-summary">0</span> event terakhir</summary>
+          <div style="overflow-x: auto;">
+            <table class="warp-burned-table">
+              <thead>
+                <tr>
+                  <th>Waktu</th>
+                  <th>Event</th>
+                  <th>Prefix /64</th>
+                  <th>HTTP</th>
+                  <th>HS / Latency</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody id="warp-events-tbody">
+                <tr><td colspan="6" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada riwayat transisi egress WARP.</td></tr>
               </tbody>
             </table>
           </div>

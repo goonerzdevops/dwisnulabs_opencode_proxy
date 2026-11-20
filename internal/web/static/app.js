@@ -39,6 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
     warpActiveIP: document.getElementById('warp-active-ip'),
     btnCopyWarpIP: document.getElementById('btn-copy-warp-ip'),
     warpMetaLine: document.getElementById('warp-meta-line'),
+    warpStandbyLine: document.getElementById('warp-standby-line'),
     warpIdleLine: document.getElementById('warp-idle-line'),
     btnWarpHop: document.getElementById('btn-warp-hop'),
     btnWarpStop: document.getElementById('btn-warp-stop'),
@@ -46,7 +47,14 @@ document.addEventListener('DOMContentLoaded', () => {
     warpBurnedCountBtn: document.getElementById('warp-burned-count-btn'),
     warpBurnedCountSummary: document.getElementById('warp-burned-count-summary'),
     warpBurnedTbody: document.getElementById('warp-burned-tbody'),
+    warpHealthyCleanSummary: document.getElementById('warp-healthy-clean-summary'),
+    warpHealthyTotalSummary: document.getElementById('warp-healthy-total-summary'),
+    warpHealthyTbody: document.getElementById('warp-healthy-tbody'),
+    warpEventsCountSummary: document.getElementById('warp-events-count-summary'),
+    warpEventsTbody: document.getElementById('warp-events-tbody'),
     warpStat200: document.getElementById('warp-stat-200'),
+    warpStatOkIps: document.getElementById('warp-stat-ok-ips'),
+    warpStatSwaps: document.getElementById('warp-stat-swaps'),
     warpStat429: document.getElementById('warp-stat-429'),
     warpStat403: document.getElementById('warp-stat-403'),
     warpStatHops: document.getElementById('warp-stat-hops'),
@@ -265,6 +273,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const warp = data.warp || {};
     const stats = data.stats || {};
     const burned = Array.isArray(data.burned_active) ? data.burned_active : [];
+    const healthy = Array.isArray(data.healthy_ips) ? data.healthy_ips : [];
+    const recentEvents = Array.isArray(data.recent_events) ? data.recent_events : [];
     const state = String(warp.state || (enabled ? 'DORMANT' : 'DISABLED')).toUpperCase();
 
     if (elements.warpToggleEnabled && document.activeElement !== elements.warpToggleEnabled) {
@@ -366,6 +376,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    if (elements.warpStandbyLine) {
+      if (warp.standby_ready && warp.standby_prefix64) {
+        elements.warpStandbyLine.style.display = 'block';
+        elements.warpStandbyLine.style.color = 'var(--accent-green)';
+        const sEp = warp.standby_endpoint ? ` • ${warp.standby_endpoint}` : '';
+        elements.warpStandbyLine.textContent = `⚡ Warm Standby: READY (${warp.standby_prefix64}${sEp}) — swap instan <5ms`;
+      } else if (warp.standby_warming) {
+        elements.warpStandbyLine.style.display = 'block';
+        elements.warpStandbyLine.style.color = 'var(--accent-cyan)';
+        elements.warpStandbyLine.textContent = '⏳ Warm Standby: menyiapkan tunnel cadangan IPv6...';
+      } else {
+        elements.warpStandbyLine.style.display = 'none';
+      }
+    }
+
     if (elements.warpIdleLine) {
       const idleRem = Math.max(0, (warp.idle_shutdown_in_seconds || 0) - elapsedSec);
       if (state === 'ACTIVE' && idleRem > 0) {
@@ -376,13 +401,57 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // 4. Stats & Active Burned /64 Table
+    // 4. Stats, Verified Healthy IPv6 (200 OK), Active Burned /64, and Live Transition Timeline
     if (elements.warpStat200) elements.warpStat200.textContent = String(stats.total_ok_200 || 0);
+    if (elements.warpStatOkIps) elements.warpStatOkIps.textContent = `(${stats.unique_ok_prefixes || healthy.length} IP)`;
+    if (elements.warpStatSwaps) elements.warpStatSwaps.textContent = String(stats.standby_swaps || 0);
     if (elements.warpStat429) elements.warpStat429.textContent = String(stats.total_burned_429 || 0);
     if (elements.warpStat403) elements.warpStat403.textContent = String(stats.total_forbidden_403 || 0);
     if (elements.warpStatHops) elements.warpStatHops.textContent = String(stats.total_hops || 0);
     if (elements.warpBurnedCountBtn) elements.warpBurnedCountBtn.textContent = String(burned.length);
     if (elements.warpBurnedCountSummary) elements.warpBurnedCountSummary.textContent = String(burned.length);
+    if (elements.warpHealthyCleanSummary) {
+      const cleanCnt = data.healthy_clean_count !== undefined
+        ? data.healthy_clean_count
+        : healthy.filter(h => h.status !== 'burned').length;
+      elements.warpHealthyCleanSummary.textContent = String(cleanCnt);
+    }
+    if (elements.warpHealthyTotalSummary) elements.warpHealthyTotalSummary.textContent = String(healthy.length);
+    if (elements.warpEventsCountSummary) elements.warpEventsCountSummary.textContent = String(recentEvents.length);
+
+    if (elements.warpHealthyTbody) {
+      if (healthy.length === 0) {
+        elements.warpHealthyTbody.innerHTML = '<tr><td colspan="7" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada IPv6 WARP yang tercatat sukses HTTP 200.</td></tr>';
+      } else {
+        elements.warpHealthyTbody.innerHTML = healthy.map(h => {
+          let pillClass = 'warp-status-healthy';
+          let pillLabel = '✅ OK 200';
+          if (h.status === 'active') {
+            pillClass = 'warp-status-active';
+            pillLabel = '🟢 ACTIVE';
+          } else if (h.status === 'standby') {
+            pillClass = 'warp-status-standby';
+            pillLabel = '⚡ STANDBY';
+          } else if (h.status === 'burned') {
+            pillClass = 'warp-status-burned';
+            pillLabel = '⏳ Burned';
+          }
+          const avgLat = h.avg_latency_ms ? `${(h.avg_latency_ms / 1000).toFixed(2)}s` : '-';
+          const edgeEp = `${h.colo || '-'} / ${h.endpoint || '-'}`;
+          return `
+            <tr>
+              <td><span class="warp-status-pill ${pillClass}">${pillLabel}</span></td>
+              <td style="color: var(--accent-green);">${escapeHtml(h.prefix_64 || h.ip)}</td>
+              <td>${escapeHtml(h.ip || '-')}</td>
+              <td style="font-weight: 700; color: #34d399;">${Number(h.ok_count || 0)} req</td>
+              <td>${escapeHtml(avgLat)}</td>
+              <td style="color: var(--text-muted);">${escapeHtml(edgeEp)}</td>
+              <td>${escapeHtml(formatLocalDateTime(h.last_ok_at))}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+    }
 
     if (elements.warpBurnedTbody) {
       if (burned.length === 0) {
@@ -402,6 +471,49 @@ document.addEventListener('DOMContentLoaded', () => {
               <td style="color: ${stColor};">HTTP ${b.http_status || 429} (${escapeHtml(b.reason || 'limit')})</td>
               <td>${escapeHtml(formatLocalDateTime(b.expires_at))}</td>
               <td style="font-weight: 600;">${formatCountdownID(rem)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+    }
+
+    if (elements.warpEventsTbody) {
+      if (recentEvents.length === 0) {
+        elements.warpEventsTbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); text-align: center; padding: 10px;">Belum ada riwayat transisi egress WARP.</td></tr>';
+      } else {
+        elements.warpEventsTbody.innerHTML = recentEvents.map(ev => {
+          const evType = String(ev.event || '-');
+          let evColor = '#cbd5e1';
+          let evLabel = evType;
+          if (evType === 'hop_active' || evType === 'ok_200') {
+            evColor = '#34d399';
+            evLabel = evType === 'hop_active' ? '✅ hop_active' : '✅ ok_200';
+          } else if (evType === 'swap_standby') {
+            evColor = '#38bdf8';
+            evLabel = '⚡ swap_standby';
+          } else if (evType === 'hop_burned') {
+            evColor = '#fbbf24';
+            evLabel = '🔥 hop_burned';
+          } else if (evType === 'tool_conceal') {
+            evColor = '#c084fc';
+            evLabel = '🛡️ tool_conceal';
+          } else if (evType === 'direct_recovered') {
+            evColor = '#34d399';
+            evLabel = '🌐 direct_recovered';
+          }
+          const httpTxt = ev.http_status ? `HTTP ${ev.http_status}` : '-';
+          const hsLat = (ev.handshake_ms || ev.latency_ms)
+            ? `${ev.handshake_ms || 0}ms / ${ev.latency_ms || 0}ms`
+            : '-';
+          const detail = ev.reason || ev.endpoint || '-';
+          return `
+            <tr>
+              <td style="color: var(--text-muted);">${escapeHtml(formatTime(ev.ts))}</td>
+              <td style="color: ${evColor}; font-weight: 600;">${escapeHtml(evLabel)}</td>
+              <td style="color: var(--accent-cyan);">${escapeHtml(ev.prefix_64 || ev.ip || '-')}</td>
+              <td>${escapeHtml(httpTxt)}</td>
+              <td>${escapeHtml(hsLat)}</td>
+              <td style="color: var(--text-muted);">${escapeHtml(detail)}</td>
             </tr>
           `;
         }).join('');

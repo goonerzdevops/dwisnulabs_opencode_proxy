@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"opencode-proxy/internal/config"
@@ -17,10 +18,12 @@ import (
 
 // Upstream posts fingerprint-shaped requests to the OpenCode free tier.
 type Upstream struct {
-	pool         *ProxyPool
-	logger       *log.Logger
-	sessionStore *SessionStore
-	warp         *WarpFallbackManager
+	pool           *ProxyPool
+	logger         *log.Logger
+	sessionStore   *SessionStore
+	warp           *WarpFallbackManager
+	concealMu      sync.RWMutex
+	concealLearned map[string]time.Time
 }
 
 // NewUpstream builds an Upstream client backed by an outbound ProxyPool.
@@ -31,10 +34,44 @@ func NewUpstream(cfg config.Config, logger *log.Logger, sessionStore ...*Session
 		store = sessionStore[0]
 	}
 	return &Upstream{
-		pool:         NewProxyPool(cfg, logger),
-		logger:       logger,
-		sessionStore: store,
+		pool:           NewProxyPool(cfg, logger),
+		logger:         logger,
+		sessionStore:   store,
+		concealLearned: make(map[string]time.Time),
 	}
+}
+
+func (u *Upstream) isConcealLearned(sig string) bool {
+	if sig == "" {
+		return false
+	}
+	u.concealMu.RLock()
+	exp, ok := u.concealLearned[sig]
+	u.concealMu.RUnlock()
+	return ok && time.Now().Before(exp)
+}
+
+func (u *Upstream) learnConceal(sig string) {
+	if sig == "" {
+		return
+	}
+	u.concealMu.Lock()
+	defer u.concealMu.Unlock()
+	if u.concealLearned == nil {
+		u.concealLearned = make(map[string]time.Time)
+	}
+	if len(u.concealLearned) >= 128 {
+		now := time.Now()
+		for k, exp := range u.concealLearned {
+			if now.After(exp) {
+				delete(u.concealLearned, k)
+			}
+		}
+		if len(u.concealLearned) >= 128 {
+			u.concealLearned = make(map[string]time.Time)
+		}
+	}
+	u.concealLearned[sig] = time.Now().Add(6 * time.Hour)
 }
 
 // SetSessionStore assigns the session store to enable automatic session invalidation.
@@ -59,13 +96,13 @@ func (u *Upstream) Close() {
 	}
 }
 
-// SyncConfig syncs the proxy pool with the new configuration.
+// SyncConfig syncs the proxy pool and WARP manager with the new configuration.
 func (u *Upstream) SyncConfig(cfg config.Config) {
 	if u.pool != nil {
 		u.pool.Sync(cfg)
 	}
-	if u.warp != nil && !cfg.WarpFallbackEnabled {
-		u.warp.Stop("disabled_in_config")
+	if u.warp != nil {
+		u.warp.SyncConfig(cfg)
 	}
 }
 
@@ -127,6 +164,13 @@ func isOverload429(body []byte) bool {
 // service is overloaded"), it automatically retries with exponential backoff (up to 5 retries).
 // If it returns 403 (FreeTierError) or non-overload 429 (quota limit), the rejected session is dropped.
 func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *PreparedRequest, fp Fingerprint) (*http.Response, error) {
+	// Proactively conceal caller toolsets that previously triggered content-based 429s
+	// so subsequent turns skip the wasted 429 round-trip entirely.
+	toolSig := CallerToolsSignature(prepared)
+	if toolSig != "" && u.isConcealLearned(toolSig) {
+		ConcealAllCallerTools(prepared)
+	}
+
 	payload, err := json.Marshal(prepared.Body)
 	if err != nil {
 		return nil, fmt.Errorf("encode upstream body: %w", err)
@@ -154,17 +198,21 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 	}
 
 	var response *http.Response
-	forceDirect := false // set after a tool-conceal retry: stay on the primary egress
+	forceDirect := false // set after a direct tool-conceal retry: stay on the primary egress
+	didConcealRetry := false
 	for attempt := 0; attempt <= len(delays); attempt++ {
 		var (
 			resp *http.Response
 			err  error
 		)
+		unconcealedTools := HasUnconcealedCallerTools(prepared)
 		usingWarpDirect := !forceDirect && u.warp != nil && u.warp.ShouldUseFallback(cfg, u.pool)
 		if usingWarpDirect {
-			resp, err = u.warp.Send(ctx, cfg, reqFactoryWithFP, fp, u.sessionStore)
+			resp, err = u.warp.SendWithOptions(ctx, cfg, reqFactoryWithFP, fp, u.sessionStore, WarpSendOptions{
+				ReturnOnFirst429WithoutBurn: unconcealedTools,
+			})
 		} else {
-			resp, _, err = u.pool.DoWithFailover(ctx, cfg, reqFactory)
+			resp, _, err = u.pool.DoWithFailoverMode(ctx, cfg, reqFactory, unconcealedTools)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("upstream request failed: %w", err)
@@ -172,6 +220,9 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 		response = resp
 
 		if resp.StatusCode == http.StatusOK {
+			if didConcealRetry && toolSig != "" {
+				u.learnConceal(toolSig)
+			}
 			if forceDirect {
 				// The earlier 429 was caused by tool content, not egress quota.
 				u.pool.ClearCooldown()
@@ -205,20 +256,33 @@ func (u *Upstream) Send(ctx context.Context, cfg config.Config, prepared *Prepar
 		}
 
 		// 1b. Upstream also answers 429 FreeUsageLimitError for some third-party tool
-		// descriptions. Conceal caller tools once on the same egress before burning
-		// the session or hopping to WARP (a hop cannot fix a content rejection).
+		// descriptions. Conceal caller tools once on the SAME egress (direct stays direct;
+		// WARP stays on the exact same WARP tunnel) before burning IPv6 or cooling down direct.
 		if resp.StatusCode == http.StatusTooManyRequests && ConcealAllCallerTools(prepared) {
 			if newPayload, mErr := json.Marshal(prepared.Body); mErr == nil {
 				payload = newPayload
+				didConcealRetry = true
 				if fp.SessionID != "" {
 					InvalidateSession(fp.SessionID, u.sessionStore)
 				}
 				fp = Fingerprint{SessionID: GenerateSessionID(time.Now().UnixMilli()), Project: fp.Project}
 				if u.logger != nil {
-					u.logger.Printf("[tool-conceal] upstream 429 with caller tools; retrying once with concealed tools on same egress")
+					egress := "direct"
+					if usingWarpDirect {
+						egress = "warp_ipv6"
+					}
+					u.logger.Printf("[tool-conceal] upstream 429 with caller tools on %s; retrying once with concealed tools on same egress", egress)
+				}
+				if usingWarpDirect && u.warp != nil {
+					u.warp.Store().RecordEvent(WarpLogEntry{
+						Event:  "tool_conceal",
+						Reason: "concealed caller tools before burning WARP IPv6",
+					})
 				}
 				attempt--
-				forceDirect = true
+				if !usingWarpDirect {
+					forceDirect = true
+				}
 				continue
 			}
 		}

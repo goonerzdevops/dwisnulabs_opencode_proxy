@@ -842,6 +842,7 @@ select:focus, input[type="text"]:focus, textarea:focus {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .warp-burned-details {
   margin-top: 10px;
@@ -849,6 +850,12 @@ select:focus, input[type="text"]:focus, textarea:focus {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 8px 12px;
+}
+.warp-healthy-details {
+  border-color: rgba(16, 185, 129, 0.3);
+}
+.warp-events-details {
+  border-color: rgba(56, 189, 248, 0.25);
 }
 .warp-burned-details summary {
   cursor: pointer;
@@ -863,16 +870,48 @@ select:focus, input[type="text"]:focus, textarea:focus {
   margin-top: 8px;
   font-family: var(--font-mono);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .warp-burned-table th,
 .warp-burned-table td {
   text-align: left;
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 .warp-burned-table th {
   color: var(--text-muted);
   font-weight: 600;
+}
+.warp-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.warp-status-active {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+}
+.warp-status-standby {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+.warp-status-healthy {
+  background: rgba(16, 185, 129, 0.1);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.28);
+}
+.warp-status-burned {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
 }
 
 footer {

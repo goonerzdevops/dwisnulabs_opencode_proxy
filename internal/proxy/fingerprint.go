@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -198,6 +200,124 @@ var restrictedToolAliases = map[string]string{
 	"working_directory": "workspace_dir",
 }
 
+// restrictedDescriptionPatterns lists empirically verified third-party tool
+// description substrings that trigger opencode.ai 429 FreeUsageLimitError even
+// on healthy IPs (e.g. DeepSeek Harness `skill`, `read`, `edit`). Neutralizing
+// them proactively prevents false direct cooldowns and false WARP IPv6 burns.
+var restrictedDescriptionPatterns = []string{
+	"session skill catalog",
+	"edit an existing utf-8 text file",
+	"read a utf-8 text file and return line-numbered content",
+}
+
+func toolDescription(tool map[string]any) string {
+	if fn, ok := tool["function"].(map[string]any); ok {
+		if d, ok := fn["description"].(string); ok {
+			return d
+		}
+	}
+	if d, ok := tool["description"].(string); ok {
+		return d
+	}
+	return ""
+}
+
+func hasRestrictedToolDescription(tool map[string]any) bool {
+	desc := strings.ToLower(toolDescription(tool))
+	if desc == "" {
+		return false
+	}
+	for _, pat := range restrictedDescriptionPatterns {
+		if strings.Contains(desc, pat) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneToolNeutralDesc(tool map[string]any, origName string) map[string]any {
+	out := make(map[string]any, len(tool))
+	for k, v := range tool {
+		out[k] = v
+	}
+	if fn, ok := tool["function"].(map[string]any); ok {
+		fnCopy := make(map[string]any, len(fn))
+		for k, v := range fn {
+			fnCopy[k] = v
+		}
+		fnCopy["description"] = "Caller tool " + origName + "."
+		out["function"] = fnCopy
+		return out
+	}
+	out["description"] = "Caller tool " + origName + "."
+	return out
+}
+
+// HasUnconcealedCallerTools reports whether req still declares non-fingerprint
+// caller tools that have not yet been rewritten to opaque fn_<N> aliases.
+func HasUnconcealedCallerTools(req *PreparedRequest) bool {
+	if req == nil || req.Body == nil {
+		return false
+	}
+	items, ok := req.Body["tools"].([]any)
+	if !ok || len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := toolNameCarrier(tool)
+		if key := fingerprintKey(name); key != "" && matchesFingerprint(tool, fingerprintDefinitions[key]) {
+			continue
+		}
+		if isOpaqueFnAlias(name) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// CallerToolsSignature builds a stable hash over non-fingerprint caller tool
+// names and descriptions so Upstream can remember toolsets that require
+// concealing without paying a 429 round-trip on every turn.
+func CallerToolsSignature(req *PreparedRequest) string {
+	if req == nil || req.Body == nil {
+		return ""
+	}
+	items, ok := req.Body["tools"].([]any)
+	if !ok || len(items) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		tool, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := toolNameCarrier(tool)
+		if key := fingerprintKey(name); key != "" && matchesFingerprint(tool, fingerprintDefinitions[key]) {
+			continue
+		}
+		if isOpaqueFnAlias(name) {
+			continue
+		}
+		desc := toolDescription(tool)
+		if len(desc) > 160 {
+			desc = desc[:160]
+		}
+		parts = append(parts, name+"|"+desc)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	sort.Strings(parts)
+	sum := sha1.Sum([]byte(strings.Join(parts, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
 // composeRenames merges a second rename pass (delta: newAlias -> prevSent) on
 // top of base (prevSent -> original), so Restore maps straight back to original.
 func composeRenames(base, delta RenameMap) RenameMap {
@@ -297,13 +417,25 @@ func concealFingerprintToolNames(raw any, renames RenameMap) []any {
 			seq++
 			alias := pickUniqueAlias(aliasToolName(name, seq), used)
 			renames[alias] = name
-			out = append(out, cloneToolWithName(tool, alias))
+			cloned := cloneToolWithName(tool, alias)
+			if hasRestrictedToolDescription(cloned) {
+				cloned = neutralizeToolDescription(cloned, name)
+			}
+			out = append(out, cloned)
 			continue
 		}
 		if preferred, flagged := restrictedToolAliases[strings.ToLower(strings.TrimSpace(name))]; flagged {
 			alias := pickUniqueAlias(preferred, used)
 			renames[alias] = name
-			out = append(out, cloneToolWithName(tool, alias))
+			cloned := cloneToolWithName(tool, alias)
+			if hasRestrictedToolDescription(cloned) {
+				cloned = neutralizeToolDescription(cloned, name)
+			}
+			out = append(out, cloned)
+			continue
+		}
+		if hasRestrictedToolDescription(tool) {
+			out = append(out, cloneToolNeutralDesc(tool, name))
 			continue
 		}
 		out = append(out, tool)
