@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -169,7 +170,9 @@ func (s *Server) forwardOpenCodeChat(w http.ResponseWriter, r *http.Request, bod
 			"raw":           body,
 			"prepared":      prepared.Body,
 		}, "", "  ")
-		_ = os.WriteFile("logs/last_failed_request.json", dump, 0644)
+		failLogDir := filepath.Join(filepath.Dir(s.manager.Path()), "logs")
+		_ = os.MkdirAll(failLogDir, 0o755)
+		_ = os.WriteFile(filepath.Join(failLogDir, "last_failed_request.json"), dump, 0o644)
 		s.forwardUpstreamError(w, resp)
 		return
 	}

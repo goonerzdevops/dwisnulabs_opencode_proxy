@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -559,6 +560,9 @@ func (m *WarpFallbackManager) isWireproxyBinaryPresent(cfg config.Config) bool {
 		binName = "wireproxy.exe"
 	}
 	if info, err := os.Stat(filepath.Join(m.store.DataDir(), binName)); err == nil && !info.IsDir() && info.Size() > 0 {
+		return true
+	}
+	if path, err := exec.LookPath(binName); err == nil && path != "" {
 		return true
 	}
 	return false

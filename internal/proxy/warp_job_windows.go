@@ -4,11 +4,14 @@ package proxy
 
 import (
 	"os"
+	"os/exec"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+func configureChildCmd(_ *exec.Cmd) {}
 
 var (
 	jobOnce   sync.Once

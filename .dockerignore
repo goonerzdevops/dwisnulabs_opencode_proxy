@@ -1,0 +1,35 @@
+# Git & editor
+.git
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local binaries & Windows scripts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+daemon.bat
+daemon.ps1
+run-hidden.vbs
+
+# Runtime state, secrets & logs (mounted via volume at runtime)
+config.json
+.env
+*token*.txt
+*.token
+data/
+logs/
+*.log
+*.jsonl
+
+# Tests, scratch & local docs
+scratch/
+tests/
+doc/
+*.out
+*.test

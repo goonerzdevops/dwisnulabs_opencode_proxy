@@ -201,6 +201,7 @@ BindAddress = 127.0.0.1:%d
 
 	t0 := time.Now()
 	cmd := exec.Command(binPath, "-s", "-c", confPath)
+	configureChildCmd(cmd)
 	if err := cmd.Start(); err != nil {
 		_ = os.Remove(confPath)
 		return nil, fmt.Errorf("launch wireproxy: %w", err)
