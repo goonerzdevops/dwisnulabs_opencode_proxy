@@ -336,7 +336,11 @@ func (s *WarpStore) IsBurned(prefixOrIP string) (WarpBurnEntry, bool) {
 }
 
 // IsBlockCongested reports whether the /32 IPv6 block (e.g. 2a09:bac1::/32)
-// has historically returned >= 4 quota rejections and zero HTTP 200 successes.
+// has consistently failed with zero HTTP 200 successes:
+//   - >= 6 burns with 0 OKs once at least one other /32 block has proven healthy (ok > 0), OR
+//   - >= 12 burns with 0 OKs unconditionally.
+// This prevents a fresh deployment from prematurely blacklisting its primary /32 block
+// after just a couple of busy shared prefixes.
 func (s *WarpStore) IsBlockCongested(prefixOrIP string) bool {
 	b32 := extractIPv6Block32(prefixOrIP)
 	if b32 == "" {
@@ -345,10 +349,20 @@ func (s *WarpStore) IsBlockCongested(prefixOrIP string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	st, ok := s.blockStats[b32]
-	if !ok {
+	if !ok || st.ok > 0 {
 		return false
 	}
-	return st.burned >= 4 && st.ok == 0
+	if st.burned >= 12 {
+		return true
+	}
+	if st.burned >= 6 {
+		for other, ost := range s.blockStats {
+			if other != b32 && ost.ok > 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ActiveBurnedCount returns the number of currently active (non-expired) burned prefixes.
@@ -395,7 +409,6 @@ func (s *WarpStore) MarkBurned(ip, prefix64, colo string, status int, reason str
 		s.burned[key] = entry
 		_ = atomicWriteJSON(s.burnedPath, s.burned, 0o644)
 	}
-	s.recordBlockStatLocked(key, false)
 	return entry
 }
 

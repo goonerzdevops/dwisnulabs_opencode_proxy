@@ -859,12 +859,12 @@ func TestCongestedBlockSkippedAndHealthyIPv6Tracking(t *testing.T) {
 		return mockWarpDevice(), nil
 	}
 
-	// Seed 4 historical 429s and 0 200s on 2a09:bac1::/32 so it is detected as congested.
-	for i := 0; i < 4; i++ {
+	// Seed 12 historical 429s and 0 200s on 2a09:bac1::/32 so it is detected as congested.
+	for i := 0; i < 12; i++ {
 		wm.store.AppendLog(WarpLogEntry{
 			Event:      "hop_burned",
-			IP:         fmt.Sprintf("2a09:bac1:34a%d:10::1", i),
-			Prefix64:   fmt.Sprintf("2a09:bac1:34a%d:10::/64", i),
+			IP:         fmt.Sprintf("2a09:bac1:34a%x:10::1", i%4),
+			Prefix64:   fmt.Sprintf("2a09:bac1:34a%x:10::/64", i%4),
 			Colo:       "SIN",
 			HTTPStatus: 429,
 			Reason:     "FreeUsageLimitError",
