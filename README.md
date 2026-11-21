@@ -24,7 +24,7 @@ High-performance, zero-config local proxy for OpenCode free coding models with a
 ## 🚀 Quick Start
 
 ### 1. Requirements
-- **Go 1.22+** (or use pre-built binary for Windows/Linux)
+- **Go 1.27+** (or Docker / pre-built binary for Windows/Linux)
 - Git
 
 ### 2. Build from Source
@@ -49,6 +49,37 @@ go build -o bin/opencode-proxy.exe ./cmd/opencode-proxy
 Default listening port is `20144`.
 - **Web Dashboard**: `http://127.0.0.1:20144/`
 - **OpenAI Endpoint**: `http://127.0.0.1:20144/v1`
+
+---
+
+## 🐳 Docker / WSL Deployment
+
+Multi-stage `Dockerfile` (`golang:1.27-alpine` $\rightarrow$ `alpine:3.21`) pre-bakes `wireproxy` so WARP IPv6 fallback works out of the box without `--privileged` or host IPv6. All runtime state (`config.json`, `data/warp/`, `logs/`) is persisted in `./state`.
+
+### Initial Deploy (WSL / Linux)
+```bash
+mkdir -p ~/services
+git clone https://github.com/goonerzdevops/dwisnulabs_opencode_proxy.git ~/services/opencode-proxy
+cd ~/services/opencode-proxy
+mkdir -p state/data/warp state/logs
+cp config.example.json state/config.json
+docker compose up -d --build
+```
+
+### Update from WSL
+```bash
+cd ~/services/opencode-proxy && git pull && docker compose up -d --build
+```
+
+### Useful Container Commands
+```bash
+# View live logs
+docker compose logs -f opencode-proxy
+
+# Restart / stop
+docker compose restart
+docker compose down
+```
 
 ---
 
